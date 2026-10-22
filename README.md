@@ -158,7 +158,7 @@ print(adapted.parent_analysis_id, adapted.changed_event_ids)
 Версии хранятся в каждом результате: `content_version` (хеш новости),
 `profile_version` (хеш профиля), `processing_version` (`PROCESSING_VERSION`),
 `model_id`, `prompt_version` (`news-facts.v1`, `company-relevance.v1`,
-  `company-insight.v1`, `company-adaptation.v2`). Изменение любой версии приводит к пересчёту.
+  `company-insight.v1`, `company-adaptation.v3`). Изменение любой версии приводит к пересчёту.
 
 ### Insight и лимит поисков
 

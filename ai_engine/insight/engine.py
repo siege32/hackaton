@@ -910,8 +910,16 @@ class InsightEngine:
             + ["refinement was provided by the user and is not a confirmed external fact"]
         )
         risks, opportunities = self._derive_risks_and_opportunities(updated.events)
-        updated.key_risks = risks
-        updated.potential_opportunities = opportunities
+        updated.key_risks = (
+            _dedupe_strings(synthesized.key_risks)
+            if synthesized is not None and synthesized.key_risks
+            else risks
+        )
+        updated.potential_opportunities = (
+            _dedupe_strings(synthesized.potential_opportunities)
+            if synthesized is not None and synthesized.potential_opportunities
+            else opportunities
+        )
         updated.unknowns = _dedupe_strings(
             list(previous.unknowns)
             + (synthesized.unknowns if synthesized is not None else [])
@@ -921,6 +929,7 @@ class InsightEngine:
             updated.missing_data = _dedupe_strings(previous.missing_data + synthesized.missing_data)
         updated.recommended_checks = _dedupe_strings(
             list(previous.recommended_checks)
+            + (synthesized.recommended_checks if synthesized is not None else [])
             + ["Verify refined conclusions against primary sources"]
         )
         updated.prompt_version = (
@@ -946,10 +955,13 @@ class InsightEngine:
         affected: set[str],
     ):
         """Re-evaluate a refinement with the model, while grounding output in stored evidence."""
-        events = [event for event in previous.events if event.news_id in affected]
-        # The insight schema deliberately excludes DROP events. For an already
-        # dropped event the deterministic path is more appropriate.
-        if not events or any(e.relevance_class == RelevanceClass.DROP for e in events):
+        events = [
+            event for event in previous.events
+            if event.news_id in affected and event.relevance_class != RelevanceClass.DROP
+        ]
+        # The insight schema deliberately excludes DROP events; process the
+        # remaining affected events through LLM adaptation independently.
+        if not events:
             return None
         processing_by_news = {
             event.news_id: self.store.get_processing_result(event.news_id) for event in events
@@ -959,16 +971,27 @@ class InsightEngine:
         relationships = self.relationships.list_relationships(
             company.company_id, limit=self.settings.max_relationships
         )
-        first = next(iter(processing_by_news.values()))
+        processing_items = list(processing_by_news.values())
+        first = processing_items[0]
+        combined = NewsProcessingResult.from_dict(first.to_dict())
+        combined.facts = [fact for item in processing_items for fact in item.facts]
+        combined.main_events = _dedupe_strings(
+            [main_event for item in processing_items for main_event in item.main_events]
+        )
+        combined_news_text = "\n".join(
+            self._news_text(item.news_id, item) for item in processing_items
+        )
         context = self.classifier.builder.build(
             company,
-            first,
-            news_text=self._news_text(first.news_id, first),
+            combined,
+            news_text=combined_news_text,
             relationships=relationships,
         ) if self.classifier is not None else None
         if context is None:
             return None
-        system_prompt, user_prompt = adaptation_prompts(previous, refinement, context)
+        llm_refinement = Refinement.from_dict(refinement.to_dict())
+        llm_refinement.affected_event_ids = [event.news_id for event in events]
+        system_prompt, user_prompt = adaptation_prompts(previous, llm_refinement, context)
         response = self.llm.complete_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,

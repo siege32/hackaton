@@ -323,7 +323,7 @@ python -m ai_engine worker --max-jobs 1
   валидируется на стороне клиента, поэтому провайдер не обязан поддерживать
   `json_schema`.
 - Версии промптов: `news-facts.v1`, `company-relevance.v1`,
-  `company-insight.v1`, `company-adaptation.v2`. При изменении семантики
+  `company-insight.v1`, `company-adaptation.v3`. При изменении семантики
   промпта версию нужно поднять, иначе старые результаты будут считаться
   совместимыми.
 
