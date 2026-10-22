@@ -1,95 +1,86 @@
-# HTTP API
+# API и веб-интерфейс
 
-Запуск из корня репозитория:
+Из корня репозитория:
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
 python -m uvicorn api.main:app --reload
 ```
 
-Swagger UI доступен по адресу `http://127.0.0.1:8000/docs`.
+Веб-интерфейс доступен на `http://127.0.0.1:8000/`, Swagger UI — на
+`http://127.0.0.1:8000/docs`.
 
-## `GET /health`
+## Источники данных и конфигурация
 
-Проверка доступности процесса:
+При запуске API читает `.env` и подключает существующие модули:
 
-```json
-{"status":"ok"}
-```
+- база компаний `DATA_DB_PATH` (по умолчанию `data/processed/companies.sqlite`, read-only);
+- каталог новостей `NEWS_DB_PATH` (по умолчанию `data/processed/news.sqlite`);
+- SQLite с результатами анализа `INTEL_SQLITE_PATH` (по умолчанию `./intel.db`);
+- OCR-фрагменты `BANK_REPORTS_OCR_DIR` (по умолчанию `data/bank_reports/ocr`);
+- LLM — переменные `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT`, `LLM_MAX_TOKENS`.
 
-## `POST /analyze`
+API не строит базу компаний автоматически: положите исходные CSV в `data/raw/`
+и выполните `python -m data_pipeline build`. Каталог новостей создаётся
+идемпотентно при первом обращении. Чтение профилей, связей и расчётов идёт через
+`SqliteCompanyRepository`, `PaymentRelationshipRepository` и
+`PaymentCalculationRepository`; индекс банка — через `BankReportsIndex`.
 
-Принимает `AnalysisContext` из `ai_engine.models` и возвращает `AnalysisResult`.
-Обязательные поля: `company_id`, `event_id`, `as_of_date`, `profile` и
-`event_facts`. Структуры этих объектов совпадают с моделями движка; неизвестные
-поля отклоняются ответом `422`.
+## Маршруты
 
-```json
-{
-  "company_id": "company-123",
-  "event_id": "event-456",
-  "as_of_date": "2026-10-21",
-  "profile": {
-    "company_id": "company-123",
-    "name": "Название компании",
-    "industries": ["retail"],
-    "geographies": ["RU"],
-    "counterparties": []
-  },
-  "event_facts": [
-    {
-      "fact_id": "fact-1",
-      "text": "Текст подтвержденного факта",
-      "source_ids": ["source-1"]
-    }
-  ],
-  "sources": [
-    {"source_id": "source-1", "title": "Источник", "kind": "news"}
-  ]
-}
-```
+| Метод и путь | Назначение |
+|---|---|
+| `GET /api/v1/health` | Готовность базы компаний, новостей, OCR и LLM |
+| `GET /api/v1/data/report` | Отчёт качества собранной базы |
+| `GET /api/v1/companies` | Выбор компании, поиск, pagination |
+| `GET /api/v1/companies/{id}` | Профиль и `missing_data` |
+| `GET /api/v1/companies/{id}/relationships` | Связи из выгрузки; платежи остаются неподтверждёнными наблюдениями |
+| `GET /api/v1/companies/{id}/exposure` | Секторальная структура; `okved_filter` добавляет расчёт затронутых отраслей |
+| `GET /api/v1/companies/{id}/calculations` | Базовые платёжные расчёты |
+| `GET /api/v1/news` | Лента с фильтром `prefilter`, источником и дублями |
+| `GET /api/v1/news/search?query=...` | BM25-поиск по каталогу новостей |
+| `GET /api/v1/news/{id}` | Новость и все публикации кластера |
+| `POST /api/v1/news` | Очистка и сохранение ручной новости, дедупликация |
+| `POST /api/v1/news/fetch` | Загрузка включённых RSS (опционально `source_ids`, `max_items`) |
+| `GET /api/v1/reports` | Каталог 9 банковских отчётов |
+| `GET /api/v1/reports/search?query=...` | Цитируемые фрагменты OCR с датой, страницей и confidence |
+| `POST /api/v1/analysis` | Фоновая задача анализа выбранной компании и новостей |
+| `GET /api/v1/jobs/{job_id}` | Этап, прогресс, статус и готовый результат |
+| `POST /api/v1/analysis/{analysis_id}/refinements` | Фоновое применение пользовательского уточнения |
+| `GET /api/v1/analysis/{analysis_id}` | Сохранённый результат анализа |
+| `GET /api/v1/processing/{news_id}` | Сохранённые факты и общий результат обработки |
 
-При заданном `SXSVN_LLM_API_KEY` запрос использует настроенный OpenAI-compatible
-клиент. Без ключа работает детерминированный режим движка. Внешние инструменты
-пока не подключены: движок сообщает об их недоступности в `missing_data` и
-может вернуть `needs_review`, не создавая фиктивных данных.
-
-## `POST /v1/analyze/news`
-
-Упрощённый вход первого сквозного сценария: профиль компании и одна `NewsItem`.
-API добавляет источник новости и передаёт контекст в тот же движок. Если настроен
-`SXSVN_LLM_API_KEY`, движок сам выполнит извлечение фактов и разбор; отдельный
-контракт анализа не дублируется.
+Пример запуска анализа:
 
 ```json
 {
-  "event_id": "event-456",
-  "as_of_date": "2026-10-21",
-  "profile": {"company_id": "company-123", "name": "Название компании"},
-  "news": {
-    "news_id": "news-1",
-    "text": "Полный текст новости",
-    "source_id": "source-1",
-    "title": "Заголовок",
-    "url": "https://example.com/news/1",
-    "published_at": "2026-10-21"
-  }
+  "company_id": "U_26030",
+  "event_ids": ["news_0123456789abcdef"]
 }
 ```
 
-## `POST /v1/news/parse`
+Ответ содержит `job_id` и `status_url`. Job сначала запускает `process_news`,
+проверяет сохранённый результат извлечения фактов, затем вызывает
+`analyze_company_impact`. Поэтому разбор нельзя начать без фактов. Статусы:
+`queued`, `running`, `partial`, `completed`, `failed`. Ошибки и недостающие
+основания не маскируются успешным результатом. До создания job API проверяет,
+что `company_id` и каждый `event_id` существуют; неизвестный идентификатор
+возвращает `404` и не запускает обработку или платный LLM-вызов. Уточнение
+также проверяет наличие сохранённого `analysis_id` до создания job.
 
-Контракт подключения сервиса Данила. На входе должен быть передан ровно один
-параметр: `source_url` или `raw_text`; дополнительно можно передать заголовок,
-дату публикации и язык. Ответ содержит нормализованный `NewsItem`, связанный
-`Source` и признак `duplicate`. Например:
+Job status хранится в `API_JOBS_DB_PATH` или в `INTEL_SQLITE_PATH`.
+Фоновые задачи выполняются процессом FastAPI: для локальной демонстрации это
+достаточно, но для production при перезапуске процесса незавершённые задачи
+нужно восстанавливать или переносить в очередь worker’а. Redis-очередь движка
+не дублируется.
 
-```json
-{"raw_text":"Текст статьи","title":"Заголовок","published_at":"2026-10-21"}
-```
+## Ограничения безопасности
 
-Сам парсер и хранение пока не реализованы. Пока адаптер `NewsParser` не передан
-в `app.state.news_parser`, endpoint возвращает `503`. Реализация адаптера должна
-вернуть `ParsedNewsResponse`; она отвечает за очистку, стабильный `news_id` и
-`source_id`, дедупликацию и сохранение источника. Для URL-обработки API только
-передаёт URL адаптеру и не загружает страницы самостоятельно.
+- Endpoint RSS запускает загрузку только фиксированного allowlist из
+  `data_pipeline.news.sources`; произвольные URL не загружаются этим маршрутом.
+- База компаний открывается в read-only режиме. Пересборка остаётся CLI-задачей.
+- Платёжная экспозиция — доля известных платежей, не доля выручки и не
+  вероятность убытка; неизвестные отрасли отражаются верхней границей и coverage.
+- Все пользовательские утверждения показываются как уточнения, а не внешние
+  факты. Выводы сохраняют цитаты, ограничения и недостающие данные.

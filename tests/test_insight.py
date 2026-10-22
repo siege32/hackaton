@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from sxsvn_intel.config import ConfigError
-from sxsvn_intel.errors import SearchLimitExceeded, ToolUnavailableError
-from sxsvn_intel.insight.tools import SearchBudget
-from sxsvn_intel.models import (
+from ai_engine.config import ConfigError
+from ai_engine.errors import SearchLimitExceeded, ToolUnavailableError
+from ai_engine.insight.tools import SearchBudget
+from ai_engine.models import (
     AnalysisStatus,
     ImpactDirection,
     ImpactType,
@@ -13,8 +13,8 @@ from sxsvn_intel.models import (
     RefinementKind,
     RelevanceClass,
 )
-from sxsvn_intel.storage.memory import InMemoryAnalyticsIndex
-from sxsvn_intel.storage.base import AnalyticsSnippet
+from ai_engine.storage.memory import InMemoryAnalyticsIndex
+from ai_engine.storage.base import AnalyticsSnippet
 from tests.helpers import (
     GAS_NEWS,
     confirmed_supplier,

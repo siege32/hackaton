@@ -2,9 +2,9 @@
 
 Usage::
 
-    python -m sxsvn_intel check-config
-    python -m sxsvn_intel init-db [--path ./intel.db]
-    python -m sxsvn_intel worker [--max-jobs N]
+    python -m ai_engine check-config
+    python -m ai_engine init-db [--path ./intel.db]
+    python -m ai_engine worker [--max-jobs N]
 
 The CLI only reads configuration from the environment (or ``.env`` loaded by
 the surrounding deployment).  It never prints the LLM API key.

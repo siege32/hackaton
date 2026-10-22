@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from sxsvn_intel.models import (
+from ai_engine.models import (
     AnalysisStatus,
     CompanyNewsAssessment,
     CompanyProfile,
@@ -17,7 +17,7 @@ from sxsvn_intel.models import (
     Refinement,
     RelevanceClass,
 )
-from sxsvn_intel.storage.sql import (
+from ai_engine.storage.sql import (
     SqlCompanyRepository,
     SqlNewsRepository,
     SqlStore,

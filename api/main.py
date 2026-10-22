@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
+import os
+import uuid
 from contextlib import contextmanager
 from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -16,6 +19,7 @@ from ai_engine.errors import CompanyNotFoundError, ConfigError, IntelError, News
 from ai_engine.service import NewsIntelligenceService, build_service
 from ai_engine.storage.sql import SqlStore
 from data_pipeline import DataSettings, PaymentCalculationRepository, PaymentRelationshipRepository
+from data_pipeline.config import load_dotenv
 from data_pipeline.exposure import calculate_sector_exposure, get_counterparty_exposure
 from data_pipeline.news import (
     SqliteNewsRepository,
@@ -29,12 +33,15 @@ from data_pipeline.news import (
 from data_pipeline.news.sources import enabled_sources, source_by_id
 from data_pipeline.profiles import SqliteCompanyRepository
 from data_pipeline.reports import BankReportsIndex, DOCUMENTS
-from data_pipeline.store import build_database, connect, quality_report
+from data_pipeline.store import connect, quality_report
 
 from api.schemas import AnalysisRequest, NewsCreateRequest, NewsFetchRequest, RefinementRequest
+from api.jobs import JobStore
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).with_name("static")
+logger = logging.getLogger("sxsvn.api")
+load_dotenv(BASE_DIR / ".env")
 
 app = FastAPI(title="SXSVN Intelligence", version="1.0.0")
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
@@ -53,6 +60,16 @@ def _data_settings() -> DataSettings:
         reports_ocr_dir=_absolute(settings.reports_ocr_dir),
         news_db_path=_absolute(settings.news_db_path),
     )
+
+
+def _intel_path() -> Path:
+    intel_settings = IntelSettings.from_env()
+    return _absolute(Path(os.environ.get("INTEL_SQLITE_PATH") or intel_settings.sqlite_path or "data/processed/intel.sqlite"))
+
+
+def _job_store() -> JobStore:
+    path = Path(os.environ.get("API_JOBS_DB_PATH") or _intel_path())
+    return JobStore(_absolute(path))
 
 
 def _open_company_db() -> sqlite3.Connection:
@@ -83,12 +100,14 @@ def news_connection() -> Iterator[sqlite3.Connection]:
 def _service_context() -> Iterator[NewsIntelligenceService]:
     settings = _data_settings()
     company_db = _open_company_db()
-    news_db = open_news_db(settings.news_db_path)
-    intel_settings = IntelSettings.from_env()
-    intel_path = _absolute(Path(intel_settings.sqlite_path or "data/processed/intel.sqlite"))
-    intel_path.parent.mkdir(parents=True, exist_ok=True)
-    store = SqlStore.sqlite(intel_path)
+    news_db = None
+    store = None
     try:
+        news_db = open_news_db(settings.news_db_path)
+        intel_settings = IntelSettings.from_env()
+        intel_path = _intel_path()
+        intel_path.parent.mkdir(parents=True, exist_ok=True)
+        store = SqlStore.sqlite(intel_path)
         service = build_service(
             intel_settings,
             store=store,
@@ -101,8 +120,10 @@ def _service_context() -> Iterator[NewsIntelligenceService]:
         yield service
     finally:
         company_db.close()
-        news_db.close()
-        store.connection.close()
+        if news_db is not None:
+            news_db.close()
+        if store is not None:
+            store.connection.close()
 
 
 def intelligence_service() -> Iterator[NewsIntelligenceService]:
@@ -143,15 +164,6 @@ def health() -> dict:
 @app.get("/api/v1/data/report")
 def data_report(conn: sqlite3.Connection = Depends(company_connection)) -> dict:
     return quality_report(conn)
-
-
-@app.post("/api/v1/data/build")
-def build_data() -> dict:
-    settings = _data_settings()
-    try:
-        return build_database(settings.raw_dir, settings.db_path)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/v1/companies")
@@ -316,14 +328,121 @@ def reports_search(
 @app.post("/api/v1/analysis")
 def analyze_company(
     request: AnalysisRequest,
-    service: NewsIntelligenceService = Depends(intelligence_service),
+    background_tasks: BackgroundTasks,
 ) -> dict:
+    _validate_analysis_request(request)
+    job_id = uuid.uuid4().hex
+    _job_store().create(job_id, "analysis", request.model_dump(mode="json"))
+    background_tasks.add_task(_run_analysis_job, job_id)
+    return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/jobs/{job_id}"}
+
+
+def _validate_analysis_request(request: AnalysisRequest) -> None:
+    company_db = _open_company_db()
     try:
-        result = service.analyze_company_impact(request.company_id, request.event_ids)
-    except IntelError as exc:
-        status = 404 if isinstance(exc, (CompanyNotFoundError, NewsNotFoundError)) else 409
-        raise HTTPException(status_code=status, detail={"code": exc.code, "message": exc.message}) from exc
-    return result.to_dict()
+        if SqliteCompanyRepository(company_db).get_company(request.company_id) is None:
+            raise HTTPException(status_code=404, detail="Компания не найдена")
+    finally:
+        company_db.close()
+
+    news_db = open_news_db(_data_settings().news_db_path)
+    try:
+        repository = SqliteNewsRepository(news_db)
+        missing = [news_id for news_id in request.event_ids if repository.get_news(news_id) is None]
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail={"message": "Новости не найдены", "news_ids": missing},
+            )
+    finally:
+        news_db.close()
+
+
+def _run_analysis_job(job_id: str) -> None:
+    jobs = _job_store()
+    job = jobs.get(job_id)
+    if job is None:
+        return
+    payload = job["payload"]
+    event_ids = payload["event_ids"]
+    failed_news: list[str] = []
+    processing_errors: list[str] = []
+    try:
+        jobs.update(job_id, status="running", stage="Подготовка данных", progress=0.03)
+        with _service_context() as service:
+            for index, news_id in enumerate(event_ids, start=1):
+                jobs.update(
+                    job_id,
+                    status="running",
+                    stage=f"Извлечение фактов · {index}/{len(event_ids)}",
+                    progress=0.05 + 0.45 * (index - 1) / len(event_ids),
+                )
+                try:
+                    processing = service.process_news(news_id)
+                except IntelError as exc:
+                    logger.warning("news_processing_failed news_id=%s code=%s", news_id, exc.code)
+                    failed_news.append(news_id)
+                    processing_errors.append(_public_error(exc))
+                    continue
+                if not processing.processed:
+                    failed_news.append(news_id)
+                    processing_errors.append(
+                        f"Обработка новости завершилась статусом {processing.status.value}"
+                    )
+            successful_event_ids = [news_id for news_id in event_ids if news_id not in failed_news]
+            if not successful_event_ids:
+                jobs.update(
+                    job_id,
+                    status="failed",
+                    stage="Факты не извлечены",
+                    progress=1,
+                    error=processing_errors[0] if processing_errors else "Не удалось извлечь факты",
+                )
+                return
+            jobs.update(job_id, status="running", stage="Оценка влияния на компанию", progress=0.55)
+            result = service.analyze_company_impact(payload["company_id"], successful_event_ids)
+            serialized = result.to_dict()
+            if failed_news:
+                serialized["analysis_status"] = "partial"
+                serialized.setdefault("limitations", []).append(
+                    "Не удалось обработать новости: " + ", ".join(failed_news)
+                )
+            analysis_status = serialized.get("analysis_status")
+            status = analysis_status if analysis_status in {"partial", "failed"} else "completed"
+            jobs.update(
+                job_id,
+                status=status,
+                stage="Готово" if status == "completed" else "Готово с ограничениями",
+                progress=1,
+                result=serialized,
+                error=(serialized.get("summary") or "Анализ не построен") if status == "failed" else None,
+            )
+    except Exception as exc:
+        logger.exception("analysis_job_failed job_id=%s", job_id)
+        jobs.update(
+            job_id,
+            status="failed",
+            stage="Анализ не завершён",
+            progress=1,
+            error=_public_error(exc),
+        )
+
+
+def _public_error(error: Exception) -> str:
+    if isinstance(error, IntelError):
+        return f"{error.code}: {error.message}"
+    if isinstance(error, HTTPException):
+        return str(error.detail)
+    return f"Внутренняя ошибка: {type(error).__name__}"
+
+
+@app.get("/api/v1/jobs/{job_id}")
+def get_job(job_id: str) -> dict:
+    job = _job_store().get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    job.pop("payload", None)
+    return job
 
 
 @app.get("/api/v1/analysis/{analysis_id}")
@@ -338,24 +457,48 @@ def get_analysis(analysis_id: str, service: NewsIntelligenceService = Depends(in
 def refine_analysis(
     analysis_id: str,
     request: RefinementRequest,
+    background_tasks: BackgroundTasks,
     service: NewsIntelligenceService = Depends(intelligence_service),
 ) -> dict:
+    if service.get_analysis(analysis_id) is None:
+        raise HTTPException(status_code=404, detail="Разбор не найден")
+    job_id = uuid.uuid4().hex
+    payload = {"analysis_id": analysis_id, **request.model_dump(mode="json")}
+    _job_store().create(job_id, "refinement", payload)
+    background_tasks.add_task(_run_refinement_job, job_id)
+    return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/jobs/{job_id}"}
+
+
+def _run_refinement_job(job_id: str) -> None:
+    jobs = _job_store()
+    job = jobs.get(job_id)
+    if job is None:
+        return
+    payload = job["payload"]
     try:
-        result = service.adapt_company_analysis(
-            analysis_id,
-            text=request.text,
-            kind=request.kind,
-            affected_event_ids=request.affected_event_ids,
-            horizon=request.horizon,
+        jobs.update(job_id, status="running", stage="Применение уточнения", progress=0.15)
+        with _service_context() as service:
+            result = service.adapt_company_analysis(
+                payload["analysis_id"],
+                text=payload["text"],
+                kind=payload["kind"],
+                affected_event_ids=payload["affected_event_ids"],
+                horizon=payload["horizon"],
+            )
+        serialized = result.to_dict()
+        analysis_status = serialized.get("analysis_status")
+        status = analysis_status if analysis_status in {"partial", "failed"} else "completed"
+        jobs.update(
+            job_id,
+            status=status,
+            stage="Готово" if status == "completed" else "Готово с ограничениями",
+            progress=1,
+            result=serialized,
+            error=(serialized.get("summary") or "Анализ не построен") if status == "failed" else None,
         )
-    except (IntelError, ValueError) as exc:
-        if isinstance(exc, IntelError):
-            status = 404 if isinstance(exc, (CompanyNotFoundError, NewsNotFoundError)) else 409
-            detail = {"code": exc.code, "message": exc.message}
-        else:
-            status, detail = 422, str(exc)
-        raise HTTPException(status_code=status, detail=detail) from exc
-    return result.to_dict()
+    except Exception as exc:
+        logger.exception("refinement_job_failed job_id=%s", job_id)
+        jobs.update(job_id, status="failed", stage="Уточнение не применено", progress=1, error=_public_error(exc))
 
 
 @app.get("/api/v1/processing/{news_id}")

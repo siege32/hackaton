@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sxsvn_intel.config import Settings
-from sxsvn_intel.llm.client import LLMResponse
-from sxsvn_intel.models import CompanyProfile, NewsRecord, Relationship, RelationType, Significance
-from sxsvn_intel.service import NewsIntelligenceService
-from sxsvn_intel.storage.memory import (
+from ai_engine.config import Settings
+from ai_engine.llm.client import LLMResponse
+from ai_engine.models import CompanyProfile, NewsRecord, Relationship, RelationType, Significance
+from ai_engine.service import NewsIntelligenceService
+from ai_engine.storage.memory import (
     InMemoryAnalyticsIndex,
     InMemoryCalculationRepository,
     InMemoryCompanyRepository,

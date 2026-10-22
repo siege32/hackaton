@@ -79,10 +79,10 @@ class Settings:
     llm_base_url: str = "https://changellenge.up.railway.app/v1"
     llm_api_key: str = field(default="", repr=False)
     llm_model: str = DEFAULT_MODEL
-    llm_timeout: float = 45.0
+    llm_timeout: float = 180.0
     llm_max_retries: int = 2
     llm_temperature: float = 0.0
-    llm_max_tokens: int = 3000
+    llm_max_tokens: int = 8000
     llm_max_input_chars: int = 24000
     #: ``json_object`` | ``json_schema`` | ``none``.  ``json_object`` is the
     #: most widely supported structured-output mode of OpenAI-compatible APIs.
@@ -141,10 +141,10 @@ class Settings:
             llm_base_url=(_env(env, "LLM_BASE_URL", cls.llm_base_url) or "").rstrip("/"),
             llm_api_key=_env(env, "LLM_API_KEY", "") or "",
             llm_model=model,
-            llm_timeout=_env_float(env, "LLM_TIMEOUT", 45.0),
+            llm_timeout=_env_float(env, "LLM_TIMEOUT", 180.0),
             llm_max_retries=_env_int(env, "LLM_MAX_RETRIES", 2),
             llm_temperature=_env_float(env, "LLM_TEMPERATURE", 0.0),
-            llm_max_tokens=_env_int(env, "LLM_MAX_TOKENS", 3000),
+            llm_max_tokens=_env_int(env, "LLM_MAX_TOKENS", 8000),
             llm_max_input_chars=_env_int(env, "LLM_MAX_INPUT_CHARS", 24000),
             llm_response_format=response_format,
             llm_backoff_base=_env_float(env, "LLM_BACKOFF_BASE", 0.5),
