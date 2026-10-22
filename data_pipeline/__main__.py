@@ -6,6 +6,8 @@
     python -m data_pipeline profile U_123             # профиль компании (JSON)
     python -m data_pipeline exposure U_123 [--okved B,19]
     python -m data_pipeline relationships U_123 [--limit 20]
+    python -m data_pipeline ocr-reports [--doc ID] [--max-pages N] [--max-cost 60]   # платно: LLM
+    python -m data_pipeline search-reports "ключевая ставка кредиты" [--limit 3]
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import sys
 import time
 from typing import Any
 
-from .config import DataSettings
+from .config import DataSettings, load_dotenv
 from .exposure import get_counterparty_exposure
 from .profiles import SqliteCompanyRepository, get_company_profile
 from .relationships import PaymentRelationshipRepository
@@ -51,8 +53,40 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("relationships", help="связи компании")
     p.add_argument("company_id")
     p.add_argument("--limit", type=int, default=20)
+    p = sub.add_parser("ocr-reports", help="распознать PDF аналитики банка (платные вызовы LLM)")
+    p.add_argument("--doc", action="append", help="document_id из каталога; можно несколько раз")
+    p.add_argument("--max-pages", type=int, help="не больше N первых страниц каждого отчёта")
+    p.add_argument("--max-cost", type=float, default=60.0, help="остановиться, если потрачено больше")
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--force", action="store_true", help="перераспознать даже закэшированные страницы")
+    p.add_argument("--rescore", action="store_true", help="только пересчитать оценки сверки, без LLM")
+    p = sub.add_parser("search-reports", help="поиск по аналитике банка")
+    p.add_argument("query")
+    p.add_argument("--limit", type=int, default=3)
 
     args = parser.parse_args(argv)
+
+    if args.command == "ocr-reports":
+        from .reports.ocr import ocr_reports, rescore_pages
+
+        if args.rescore:
+            _print({"pages_rescored": rescore_pages(settings.reports_ocr_dir)})
+            return 0
+        load_dotenv()
+
+        def progress(r):
+            extra = f" agreement={r.agreement} {r.confidence}" if r.status == "ok" else (r.error or "")
+            print(f"[{r.status}] {r.document_id} стр. {r.page} {r.cost:.3f}{extra}", file=sys.stderr, flush=True)
+
+        _print(ocr_reports(settings.reports_dir, settings.reports_ocr_dir, document_ids=args.doc,
+                           max_pages=args.max_pages, max_cost=args.max_cost, workers=args.workers,
+                           force=args.force, on_page=progress))
+        return 0
+    if args.command == "search-reports":
+        from .reports.index import BankReportsIndex, search_bank_reports
+
+        _print(search_bank_reports(BankReportsIndex(settings.reports_ocr_dir), args.query, limit=args.limit))
+        return 0
 
     if args.command == "build":
         started = time.monotonic()

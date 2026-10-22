@@ -1,0 +1,28 @@
+{
+  "schema": "bank_report_page.v1",
+  "document_id": "alfa_fi_strategy_3q26",
+  "file": "FI_Strategy_3Q26_22072026.pdf",
+  "title": "Долговой рынок. Тактический взгляд на 3-й квартал 2026 г.: время собирать камни",
+  "report_date": "2026-07-22",
+  "page": 20,
+  "pages_total": 27,
+  "text": "Корпоративные облигации –\n\nТерритория <НЕ>фиксированного дохода",
+  "primary": {
+    "model": "z-ai/glm-5.3-flash",
+    "text": "Корпоративные облигации –\n\nТерритория <НЕ>фиксированного дохода",
+    "cost": 0.0337366864406
+  },
+  "verifier": {
+    "model": "qwen/qwen3.6-35b-a3b",
+    "text": "Корпоративные облигации –\nТерритория <НЕ>фиксированного дохода",
+    "cost": 0.056394764243999994,
+    "error": null
+  },
+  "agreement": 1.0,
+  "confidence": "high",
+  "disagreements": [],
+  "prompt_version": "bank-report-ocr.v1",
+  "render_dpi": 200,
+  "seconds": 7.0,
+  "created_at": "2026-10-22T05:49:13+00:00"
+}
