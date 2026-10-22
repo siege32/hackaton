@@ -1,4 +1,4 @@
-# SXSVN AI news-intelligence (`sxsvn_intel`)
+# SXSVN AI news-intelligence (`ai_engine`)
 
 Модуль аналитики новостей для SXSVN: извлекает проверяемые факты из новости,
 оценивает её значимость для конкретной компании и строит обоснованный прогноз
@@ -20,8 +20,9 @@
   гипотезы. Дополнительные поиски жёстко ограничены **двумя** вызовами на
   анализ (в коде, не в промпте).
 - **Уточнения пользователя.** Принимаются как `user_statement`
-  (`confirmed=False`), влияют на зависимые выводы, но не выдаются за внешний
-  факт.
+  (`confirmed=False`). При доступной LLM зависимые выводы пересматриваются
+  через adaptation prompt; без LLM уточнение сохраняется как гипотеза и не
+  выдаётся за внешний факт.
 - **Очередь.** Reserve → process → persist → ack. Ack выполняется только после
   успешного сохранения; есть retry, delayed retry, visibility timeout,
   восстановление зависших задач и dead-letter.
@@ -33,7 +34,7 @@
 ## Структура
 
 ```
-sxsvn_intel/
+ai_engine/
   config.py            настройки из env, список разрешённых моделей
   models.py            доменные модели и enum'ы
   service.py           публичный фасад NewsIntelligenceService
@@ -45,16 +46,14 @@ sxsvn_intel/
   storage/             протоколы, in-memory и SQL-адаптеры, schema.sql
   queue/               Redis reliable queue и in-memory fake
   llm/                 OpenAI-совместимый клиент, промпты, JSON-парсинг
-tests/                 58 тестов, фейковый LLM, без сети
+tests/                 61 тест, фейковый LLM, без сети
 docs/INTEGRATION.md    контракты для интеграции
 ```
 
 ## Быстрый старт
 
-Требуется Python 3.10+ (проверено на 3.13.15). Обязательных сторонних
-зависимостей почти нет: Pydantic используется для проверки структуры ответов
-LLM; OpenAI SDK нужен при включённом LLM, а `redis` — только для реальной
-очереди.
+Требуется Python 3.11+. OpenAI SDK используется для LLM, а `redis` — для
+реальной очереди.
 
 ```powershell
 python -m venv .venv
@@ -68,15 +67,14 @@ pip install -e ".[redis]"
 Copy-Item .env.example .env   # заполнить LLM_API_KEY и параметры БД
 ```
 
-Переменные окружения читаются из процесса; `.env` нужно загрузить средствами
-деплоя (dotenv/pydantic-settings/Docker), модуль намеренно не перезаписывает
-окружение.
+Настройки читаются из окружения процесса и локального `.env`. Значения из
+процесса имеют приоритет; `.env` не перезаписывает уже заданные переменные.
 
 ### Проверка конфигурации и схемы
 
 ```powershell
-python -m sxsvn_intel check-config
-python -m sxsvn_intel init-db --path .\intel.db
+python -m ai_engine check-config
+python -m ai_engine init-db --path .\intel.db
 ```
 
 `check-config` печатает только безопасные поля; API-ключ не выводится.
@@ -84,9 +82,9 @@ python -m sxsvn_intel init-db --path .\intel.db
 ### Запуск worker
 
 ```powershell
-python -m sxsvn_intel worker
+python -m ai_engine worker
 # обработать не более 10 задач и выйти:
-python -m sxsvn_intel worker --max-jobs 10
+python -m ai_engine worker --max-jobs 10
 ```
 
 Worker использует **существующие** ключи Redis (`NEWS_QUEUE_KEY` и др.).
@@ -96,7 +94,7 @@ Worker использует **существующие** ключи Redis (`NEWS
 ### Программный API
 
 ```python
-from sxsvn_intel import Settings, build_service
+from ai_engine import Settings, build_service
 
 settings = Settings.from_env()
 service = build_service(settings)          # нужен INTEL_SQLITE_PATH
@@ -160,7 +158,7 @@ print(adapted.parent_analysis_id, adapted.changed_event_ids)
 Версии хранятся в каждом результате: `content_version` (хеш новости),
 `profile_version` (хеш профиля), `processing_version` (`PROCESSING_VERSION`),
 `model_id`, `prompt_version` (`news-facts.v1`, `company-relevance.v1`,
-`company-insight.v1`). Изменение любой версии приводит к пересчёту.
+  `company-insight.v1`, `company-adaptation.v2`). Изменение любой версии приводит к пересчёту.
 
 ### Insight и лимит поисков
 
@@ -176,7 +174,9 @@ print(adapted.parent_analysis_id, adapted.changed_event_ids)
 `adapt_company_analysis` создаёт новую версию анализа (`parent_analysis_id`),
 сохраняет уточнение с `source="user_statement"`, `confirmed_external=False`,
 помечает затронутые события и добавляет ограничения. Это не «переписывание
-LLM»: преобразование детерминированное.
+LLM»: при доступной LLM создаётся новая версия анализа через adaptation
+prompt, а ответы проверяются по сохранённым фактам. Уточнение остаётся
+неподтверждённым пользовательским свидетельством.
 
 ## Redis-сообщение
 

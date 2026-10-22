@@ -18,6 +18,7 @@ dependencies = [
 sxsvn-news-worker = "ai_engine.worker_cli:main"
 
 [project.optional-dependencies]
+llm = []
 redis = ["redis>=5.0"]
 # Распознавание PDF-аналитики банка (data_pipeline.reports.ocr): рендер страниц в PNG.
 ocr = ["pymupdf>=1.24"]

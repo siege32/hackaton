@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from sxsvn_intel.errors import GroundingValidationError
-from sxsvn_intel.models import NewsRecord, ProcessingStatus, RelevanceClass
+from ai_engine.errors import GroundingValidationError
+from ai_engine.models import NewsRecord, ProcessingStatus, RelevanceClass
 from tests.helpers import FACT_PROMPT, GAS_NEWS, fact_payload, make_service
 
 

@@ -11,6 +11,7 @@ logged.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass, field, replace
 from typing import Mapping
 
@@ -29,6 +30,26 @@ KNOWN_MODELS = (
 )
 
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+DEFAULT_LLM_MAX_TOKENS = 8000
+
+
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    """Load simple KEY=VALUE pairs without overriding process environment."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if value.startswith(("'", '"')) and value.endswith(value[0]) and len(value) >= 2:
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
 
 
 def _env(env: Mapping[str, str], name: str, default: str | None = None) -> str | None:
@@ -82,7 +103,7 @@ class Settings:
     llm_timeout: float = 45.0
     llm_max_retries: int = 2
     llm_temperature: float = 0.0
-    llm_max_tokens: int = 3000
+    llm_max_tokens: int = DEFAULT_LLM_MAX_TOKENS
     llm_max_input_chars: int = 24000
     #: ``json_object`` | ``json_schema`` | ``none``.  ``json_object`` is the
     #: most widely supported structured-output mode of OpenAI-compatible APIs.
@@ -123,7 +144,9 @@ class Settings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
-        env = env if env is not None else os.environ
+        if env is None:
+            _load_dotenv()
+            env = os.environ
         model = _env(env, "LLM_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
         allow_any = _env_bool(env, "LLM_ALLOW_ANY_MODEL", False)
         if not allow_any and model not in KNOWN_MODELS:
@@ -144,7 +167,7 @@ class Settings:
             llm_timeout=_env_float(env, "LLM_TIMEOUT", 45.0),
             llm_max_retries=_env_int(env, "LLM_MAX_RETRIES", 2),
             llm_temperature=_env_float(env, "LLM_TEMPERATURE", 0.0),
-            llm_max_tokens=_env_int(env, "LLM_MAX_TOKENS", 3000),
+            llm_max_tokens=_env_int(env, "LLM_MAX_TOKENS", DEFAULT_LLM_MAX_TOKENS),
             llm_max_input_chars=_env_int(env, "LLM_MAX_INPUT_CHARS", 24000),
             llm_response_format=response_format,
             llm_backoff_base=_env_float(env, "LLM_BACKOFF_BASE", 0.5),
@@ -211,6 +234,8 @@ class Settings:
             "llm_timeout": self.llm_timeout,
             "llm_max_retries": self.llm_max_retries,
             "llm_temperature": self.llm_temperature,
+            "llm_max_tokens": self.llm_max_tokens,
+            "llm_max_input_chars": self.llm_max_input_chars,
             "llm_response_format": self.llm_response_format,
             "llm_api_key_configured": bool(self.llm_api_key),
             "classifier_mode": self.classifier_mode,

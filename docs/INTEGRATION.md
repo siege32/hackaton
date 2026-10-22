@@ -1,4 +1,4 @@
-# Интеграция `sxsvn_intel` с SXSVN
+# Интеграция `ai_engine` с SXSVN
 
 Документ описывает контракты между модулем и остальной системой. Модуль
 намеренно не владеет таблицами новостей/компаний и не создаёт новую очередь,
@@ -21,7 +21,7 @@ API или UI.
 
 ## 2. Протоколы адаптеров
 
-Все протоколы находятся в `sxsvn_intel/storage/base.py` и проверяются
+Все протоколы находятся в `ai_engine/storage/base.py` и проверяются
 структурно (`runtime_checkable`), поэтому наследование не требуется.
 
 ```python
@@ -145,8 +145,8 @@ AnalyticsSnippet(
 ### 3.1. SQLite (локально, тесты)
 
 ```python
-from sxsvn_intel import Settings
-from sxsvn_intel.service import build_service
+from ai_engine import Settings
+from ai_engine.service import build_service
 
 settings = Settings.from_env()
 service = build_service(settings)   # читает INTEL_SQLITE_PATH, создаёт intel_* таблицы
@@ -161,9 +161,9 @@ SQLite используйте отдельное соединение на пр�
 ```python
 import psycopg
 
-from sxsvn_intel import Settings
-from sxsvn_intel.service import NewsIntelligenceService
-from sxsvn_intel.storage.sql import (
+from ai_engine import Settings
+from ai_engine.service import NewsIntelligenceService
+from ai_engine.storage.sql import (
     SqlCompanyRepository,
     SqlNewsRepository,
     SqlRelationshipRepository,
@@ -221,9 +221,9 @@ JSON-поля могут быть JSON-текстом или массивами.
 Применение:
 
 ```powershell
-python -m sxsvn_intel init-db --path .\intel.db
+python -m ai_engine init-db --path .\intel.db
 # PostgreSQL:
-psql "$DATABASE_URL" -f sxsvn_intel/storage/schema.sql
+psql "$DATABASE_URL" -f ai_engine/storage/schema.sql
 ```
 
 Таблицы:
@@ -298,8 +298,8 @@ psql "$DATABASE_URL" -f sxsvn_intel/storage/schema.sql
 ### 4.4. Проверка очереди
 
 ```powershell
-python -m sxsvn_intel check-config
-python -m sxsvn_intel worker --max-jobs 1
+python -m ai_engine check-config
+python -m ai_engine worker --max-jobs 1
 ```
 
 Логи содержат `job reserved`, `job acked`, `job failed`, `job dead-lettered`,
@@ -311,7 +311,7 @@ python -m sxsvn_intel worker --max-jobs 1
   `https://changellenge.up.railway.app/v1`).
 - Модель по умолчанию: `deepseek/deepseek-v4.1-flash`. Это **предварительный**
   выбор; сравнительных замеров качества/стоимости в модуле нет.
-- Разрешённые модели перечислены в `sxsvn_intel/config.py` (`KNOWN_MODELS`).
+- Разрешённые модели перечислены в `ai_engine/config.py` (`KNOWN_MODELS`).
   `LLM_ALLOW_ANY_MODEL=1` — только для локального mock-провайдера.
 - `CLASSIFIER_MODE`:
   - `llm` — только LLM (без ключа будет `ConfigError`);
@@ -323,7 +323,7 @@ python -m sxsvn_intel worker --max-jobs 1
   валидируется на стороне клиента, поэтому провайдер не обязан поддерживать
   `json_schema`.
 - Версии промптов: `news-facts.v1`, `company-relevance.v1`,
-  `company-insight.v1`, `company-adaptation.v1`. При изменении семантики
+  `company-insight.v1`, `company-adaptation.v2`. При изменении семантики
   промпта версию нужно поднять, иначе старые результаты будут считаться
   совместимыми.
 
@@ -372,7 +372,7 @@ python -m sxsvn_intel worker --max-jobs 1
 - [ ] Задать `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` в секретах деплоя.
 - [ ] Установить `redis` (`pip install -e ".[redis]"`) и проверить `PING`.
 - [ ] Применить `storage/schema.sql` к рабочей БД.
-- [ ] Запустить `python -m sxsvn_intel check-config` и `worker --max-jobs 1`.
+- [ ] Запустить `python -m ai_engine check-config` и `worker --max-jobs 1`.
 - [ ] Проверить один реальный вызов LLM и один реальный Redis-job в staging.
 - [ ] Утвердить модель по результатам собственного сравнения (текущий выбор —
       предварительный).
