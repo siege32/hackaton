@@ -8,6 +8,13 @@
     python -m data_pipeline relationships U_123 [--limit 20]
     python -m data_pipeline ocr-reports [--doc ID] [--max-pages N] [--max-cost 60]   # платно: LLM
     python -m data_pipeline search-reports "ключевая ставка кредиты" [--limit 3]
+    python -m data_pipeline news-fetch [--source rbc] [--max-items 30]   # RSS -> каталог новостей
+    python -m data_pipeline news-add --url https://...                    # новость по ссылке
+    python -m data_pipeline news-add --title "..." --text-file news.txt   # новость текстом
+    python -m data_pipeline news-list [--all] [--limit 20]
+    python -m data_pipeline news-show news_xxx                            # публикация + все источники события
+    python -m data_pipeline news-search "ключевая ставка" [--days 7]
+    python -m data_pipeline news-enqueue                                  # задачи news.process в Redis ai_engine
 """
 
 from __future__ import annotations
@@ -60,6 +67,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--force", action="store_true", help="перераспознать даже закэшированные страницы")
     p.add_argument("--rescore", action="store_true", help="только пересчитать оценки сверки, без LLM")
+    p = sub.add_parser("news-fetch", help="загрузить новости из RSS-источников")
+    p.add_argument("--source", action="append", help="source_id (см. news/sources.py); можно несколько раз")
+    p.add_argument("--max-items", type=int, help="не больше N записей из каждой ленты")
+    p = sub.add_parser("news-add", help="добавить новость вручную")
+    p.add_argument("--url")
+    p.add_argument("--title")
+    p.add_argument("--text-file", help="файл с текстом новости (UTF-8)")
+    p.add_argument("--published-at", help="дата публикации, ISO")
+    p = sub.add_parser("news-list", help="лента событий")
+    p.add_argument("--all", action="store_true", help="включая DROP")
+    p.add_argument("--limit", type=int, default=20)
+    p = sub.add_parser("news-show", help="публикация и все источники её события")
+    p.add_argument("news_id")
+    p = sub.add_parser("news-search", help="поиск по каталогу новостей")
+    p.add_argument("query")
+    p.add_argument("--days", type=int, help="только за последние N дней")
+    p.add_argument("--limit", type=int, default=5)
+    sub.add_parser("news-enqueue", help="поставить необработанные новости в очередь Redis (REDIS_URL)")
     p = sub.add_parser("search-reports", help="поиск по аналитике банка")
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=3)
@@ -88,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
         _print(search_bank_reports(BankReportsIndex(settings.reports_ocr_dir), args.query, limit=args.limit))
         return 0
 
+    if args.command.startswith("news-"):
+        return _news_command(args, settings)
+
     if args.command == "build":
         started = time.monotonic()
         report = build_database(args.raw_dir, args.db)
@@ -112,6 +140,60 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "relationships":
         rels = PaymentRelationshipRepository(conn).list_relationships(args.company_id, limit=args.limit)
         _print([r.to_dict() for r in rels])
+    return 0
+
+
+def _news_command(args: argparse.Namespace, settings: DataSettings) -> int:
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    from .news import (SqliteNewsRepository, add_manual_text, add_url, cluster_sources, enqueue_pending,
+                       fetch_all, list_news, open_news_db, search_news)
+    from .news.fetch import parse_date
+    from .news.sources import enabled_sources, source_by_id
+
+    conn = open_news_db(settings.news_db_path)
+    if args.command == "news-fetch":
+        sources = [source_by_id(s) for s in args.source] if args.source else enabled_sources()
+        if None in sources:
+            print(f"Неизвестный источник: {args.source}", file=sys.stderr)
+            return 2
+        _print(fetch_all(conn, sources=sources, max_items=args.max_items))
+    elif args.command == "news-add":
+        if args.url:
+            result = add_url(conn, args.url)
+        elif args.title and args.text_file:
+            text = Path(args.text_file).read_text(encoding="utf-8")
+            result = add_manual_text(conn, args.title, text, published_at=parse_date(args.published_at))
+        else:
+            print("Нужно --url или --title вместе с --text-file", file=sys.stderr)
+            return 2
+        _print(result.__dict__)
+    elif args.command == "news-list":
+        rows = list_news(conn, prefilter=() if args.all else ("KEEP", "REVIEW"), limit=args.limit)
+        _print([{k: r[k] for k in ("news_id", "published_at", "source_name", "prefilter", "sources_in_cluster",
+                                   "title")} for r in rows])
+    elif args.command == "news-show":
+        record = SqliteNewsRepository(conn).get_news(args.news_id)
+        if record is None:
+            print(f"Нет новости {args.news_id}", file=sys.stderr)
+            return 1
+        _print({"news": record.to_dict(),
+                "cluster": [{k: r[k] for k in ("news_id", "published_at", "source_name", "url", "duplicate_of",
+                                               "novelty")} for r in cluster_sources(conn, record.metadata["cluster_id"])]})
+    elif args.command == "news-search":
+        since = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat() if args.days else None
+        _print(search_news(conn, args.query, period=(since, None), limit=args.limit))
+    elif args.command == "news-enqueue":
+        from ai_engine import Settings
+        from ai_engine.queue.redis_queue import RedisQueue
+
+        load_dotenv()
+        queue = RedisQueue(Settings.from_env())
+        if not queue.ping():
+            print("Redis недоступен (REDIS_URL)", file=sys.stderr)
+            return 1
+        _print({"queued": enqueue_pending(conn, queue)})
     return 0
 
 

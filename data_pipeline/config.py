@@ -22,6 +22,8 @@ class DataSettings:
     reports_dir: Path
     #: Распознанный текст отчётов по страницам (хранится в git — дорогой артефакт).
     reports_ocr_dir: Path
+    #: Каталог новостей (SQLite, в git не хранится — пересобирается из источников).
+    news_db_path: Path
 
     @classmethod
     def from_env(cls) -> "DataSettings":
@@ -31,6 +33,7 @@ class DataSettings:
             db_path=Path(os.environ.get("DATA_DB_PATH", "data/processed/companies.sqlite")),
             reports_dir=Path(os.environ.get("BANK_REPORTS_DIR", str(raw / "bank_reports"))),
             reports_ocr_dir=Path(os.environ.get("BANK_REPORTS_OCR_DIR", "data/bank_reports/ocr")),
+            news_db_path=Path(os.environ.get("NEWS_DB_PATH", "data/processed/news.sqlite")),
         )
 
 
