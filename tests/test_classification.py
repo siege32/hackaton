@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from sxsvn_intel.models import CompanyProfile, ImpactDirection, ImpactType, NewsRecord, RelevanceClass, Relationship
+from ai_engine.models import CompanyProfile, ImpactDirection, ImpactType, NewsRecord, RelevanceClass, Relationship
 from tests.helpers import (
     COMPANY_PROMPT,
     FACT_PROMPT,
@@ -69,9 +69,9 @@ class ContextualClassificationTests(unittest.TestCase):
             company_id="company-it",
             counterparty_id="cp-gazprom",
             counterparty_name="Газпром",
-            relation_type=__import__("sxsvn_intel.models", fromlist=["RelationType"]).RelationType.SUPPLIER,
+            relation_type=__import__("ai_engine.models", fromlist=["RelationType"]).RelationType.SUPPLIER,
             confirmed=False,
-            significance=__import__("sxsvn_intel.models", fromlist=["Significance"]).Significance.UNKNOWN,
+            significance=__import__("ai_engine.models", fromlist=["Significance"]).Significance.UNKNOWN,
             evidence=["mention in an article"],
             source="news",
         )

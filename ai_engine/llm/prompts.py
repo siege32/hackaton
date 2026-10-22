@@ -17,7 +17,7 @@ PROMPT_VERSIONS = {
     "facts": "news-facts.v1",
     "company_assessment": "company-relevance.v1",
     "insight": "company-insight.v1",
-    "adaptation": "company-adaptation.v1",
+    "adaptation": "company-adaptation.v3",
 }
 
 SYSTEM_BASE = """Ты — аналитический компонент системы мониторинга новостей SXSVN.
@@ -211,21 +211,27 @@ def adaptation_prompts(
     payload = {
         "previous_analysis": analysis.to_dict(),
         "user_refinement": refinement.to_dict(),
+        "affected_event_ids": refinement.affected_event_ids,
         "refinement_status": "это утверждение пользователя, НЕ подтверждённый внешний факт",
         "company_profile": context.profile.to_dict(),
         "confirmed_relationships": [r.to_dict() for r in context.relationships],
+        "candidate_exposures": [e.to_dict() for e in context.exposures],
+        "news_facts": [fact.to_dict() for fact in context.news_facts],
         "profile_gaps": context.gaps,
     }
     system = SYSTEM_BASE + """
 Задача: пересмотреть предыдущий анализ с учётом уточнения пользователя.
 Верни JSON той же структуры, что и предыдущий анализ:
 {"summary": "...", "events": [...], "key_risks": [], "potential_opportunities": [], "unknowns": [], "recommended_checks": [], "limitations": []}
+Допустимые значения: relevance_class=KEEP|REVIEW; impact_direction=positive|negative|mixed|unknown; impact_type=direct|indirect|unknown; impact_horizon=short_term|medium_term|long_term|unknown. Если уточнение снимает механизм влияния или направление нельзя подтвердить, укажи unknown (не используй neutral).
 Правила:
 - Пересматривай только выводы, которые зависят от уточнения. Остальные события сохраняй.
+- В поле events верни только затронутые события из affected_event_ids.
+- В key_risks и potential_opportunities сохрани подробные прежние пункты, не связанные с уточнением; обновляй только зависимые от него пункты. Не заменяй пояснения короткими метками с news_id.
 - Уточнение пользователя маркируй как user_statement; не выдавай его за подтверждённый внешний факт.
 - Исходный текст новости не переписывай.
 - Не добавляй новые факты, числа или источники.
-- Если уточнение говорит, что риск не относится к компании, соответствующие события должны стать DROP с указанием причины.
+- Используй DROP только если kind=user_refinement.not_relevant; прочие уточнения должны пересмотреть зависимые выводы без автоматического исключения события.
 - Изменённые события должны сохранять доступные evidence.
 """
     return system, "Входные данные:\n" + _json(payload)

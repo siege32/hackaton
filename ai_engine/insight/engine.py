@@ -23,7 +23,7 @@ from ..errors import (
     ToolUnavailableError,
 )
 from ..llm.client import LLMClient
-from ..llm.prompts import PROMPT_VERSIONS, insight_prompts
+from ..llm.prompts import PROMPT_VERSIONS, adaptation_prompts, insight_prompts
 from ..llm.schemas import InsightResponse
 from ..models import (
     AnalysisStatus,
@@ -801,10 +801,10 @@ class InsightEngine:
             source="user_statement",
             confirmed_external=False,
         )
-        self.store.save_refinement(refinement)
-
         updated = InsightResult.from_dict(previous.to_dict())
         affected = set(affected_event_ids or [e.news_id for e in updated.events])
+        refinement.affected_event_ids = sorted(affected)
+        self.store.save_refinement(refinement)
         before = {e.news_id: e.to_dict() for e in updated.events}
         limitations = []
         user_link = EvidenceLink(
@@ -816,10 +816,36 @@ class InsightEngine:
             confirmed=False,
         )
 
+        synthesized = None
+        synthesis_error = None
+        if (
+            refinement_kind not in {RefinementKind.NOT_RELEVANT, RefinementKind.HORIZON}
+            and self.settings.use_llm
+            and self.llm is not None
+        ):
+            try:
+                synthesized = self._llm_adapt(previous, refinement, company, affected)
+            except (LLMError, SchemaValidationError) as exc:
+                synthesis_error = exc.message
+                limitations.append(f"LLM adaptation failed: {exc.message}")
+
+        if synthesized is not None:
+            synthesized_by_id = {event.news_id: event for event in synthesized.events}
+            updated.events = [
+                synthesized_by_id.get(event.news_id, event) for event in updated.events
+            ]
+            updated.summary = synthesized.summary or updated.summary
+            updated.unknowns = _dedupe_strings(updated.unknowns + synthesized.unknowns)
+            updated.recommended_checks = _dedupe_strings(
+                updated.recommended_checks + synthesized.recommended_checks
+            )
+            updated.limitations = _dedupe_strings(updated.limitations + synthesized.limitations)
+
         for event in updated.events:
             if event.news_id not in affected:
                 continue
-            event.evidence.append(user_link)
+            if not any(e.kind == "user_statement" and e.ref_id == user_link.ref_id for e in event.evidence):
+                event.evidence.append(user_link)
             if refinement_kind == RefinementKind.NOT_RELEVANT:
                 event.relevance_class = RelevanceClass.DROP
                 event.impact_direction = ImpactDirection.UNKNOWN
@@ -846,7 +872,7 @@ class InsightEngine:
                 limitations.append(
                     "dependency refinement is a user statement, not a confirmed external fact"
                 )
-            else:
+            elif synthesized is None:
                 event.hypothesis = True
                 event.limitations.append(
                     "analysis revised after a user refinement; affected by unverified user input"
@@ -870,28 +896,48 @@ class InsightEngine:
             news_id for news_id, data in before.items()
             if next((e.to_dict() for e in updated.events if e.news_id == news_id), None) != data
         ]
-        updated.summary = (
-            previous.summary
-            + f" Refinement ({refinement_kind.value}) applied: {refinement.text[:200]}"
-        )
+        if synthesized is None:
+            updated.summary = (
+                previous.summary
+                + f" Refinement ({refinement_kind.value}) applied: {refinement.text[:200]}"
+            )
+        else:
+            updated.summary += f" Refinement applied: {refinement.text[:200]}"
         updated.limitations = _dedupe_strings(
             list(previous.limitations)
+            + (synthesized.limitations if synthesized is not None else [])
             + limitations
             + ["refinement was provided by the user and is not a confirmed external fact"]
         )
         risks, opportunities = self._derive_risks_and_opportunities(updated.events)
-        updated.key_risks = risks
-        updated.potential_opportunities = opportunities
+        updated.key_risks = (
+            _dedupe_strings(synthesized.key_risks)
+            if synthesized is not None and synthesized.key_risks
+            else risks
+        )
+        updated.potential_opportunities = (
+            _dedupe_strings(synthesized.potential_opportunities)
+            if synthesized is not None and synthesized.potential_opportunities
+            else opportunities
+        )
         updated.unknowns = _dedupe_strings(
             list(previous.unknowns)
+            + (synthesized.unknowns if synthesized is not None else [])
             + [e.limitations[-1] for e in updated.events if e.limitations and e.news_id in affected]
         )
+        if synthesized is not None:
+            updated.missing_data = _dedupe_strings(previous.missing_data + synthesized.missing_data)
         updated.recommended_checks = _dedupe_strings(
             list(previous.recommended_checks)
+            + (synthesized.recommended_checks if synthesized is not None else [])
             + ["Verify refined conclusions against primary sources"]
         )
-        updated.prompt_version = "refinement-rules.v1"
-        updated.model_id = "rule-engine"
+        updated.prompt_version = (
+            PROMPT_VERSIONS["adaptation"] if synthesized is not None else "refinement-rules.v1"
+        )
+        updated.model_id = self.llm.model_id if synthesized is not None and self.llm else "rule-engine"
+        if synthesis_error:
+            updated.analysis_status = AnalysisStatus.PARTIAL
         self.store.save_analysis(updated)
         self._logger.info(
             "analysis adapted analysis_id=%s parent=%s refinement=%s",
@@ -900,3 +946,91 @@ class InsightEngine:
             refinement.refinement_id,
         )
         return updated
+
+    def _llm_adapt(
+        self,
+        previous: InsightResult,
+        refinement: Refinement,
+        company: CompanyProfile,
+        affected: set[str],
+    ):
+        """Re-evaluate a refinement with the model, while grounding output in stored evidence."""
+        events = [
+            event for event in previous.events
+            if event.news_id in affected and event.relevance_class != RelevanceClass.DROP
+        ]
+        # The insight schema deliberately excludes DROP events; process the
+        # remaining affected events through LLM adaptation independently.
+        if not events:
+            return None
+        processing_by_news = {
+            event.news_id: self.store.get_processing_result(event.news_id) for event in events
+        }
+        if any(result is None for result in processing_by_news.values()):
+            return None
+        relationships = self.relationships.list_relationships(
+            company.company_id, limit=self.settings.max_relationships
+        )
+        processing_items = list(processing_by_news.values())
+        first = processing_items[0]
+        combined = NewsProcessingResult.from_dict(first.to_dict())
+        combined.facts = [fact for item in processing_items for fact in item.facts]
+        combined.main_events = _dedupe_strings(
+            [main_event for item in processing_items for main_event in item.main_events]
+        )
+        combined_news_text = "\n".join(
+            self._news_text(item.news_id, item) for item in processing_items
+        )
+        context = self.classifier.builder.build(
+            company,
+            combined,
+            news_text=combined_news_text,
+            relationships=relationships,
+        ) if self.classifier is not None else None
+        if context is None:
+            return None
+        llm_refinement = Refinement.from_dict(refinement.to_dict())
+        llm_refinement.affected_event_ids = [event.news_id for event in events]
+        system_prompt, user_prompt = adaptation_prompts(previous, llm_refinement, context)
+        response = self.llm.complete_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            prompt_version=PROMPT_VERSIONS["adaptation"],
+            response_model=InsightResponse,
+        )
+        # The user statement is attached below with its own stored refinement
+        # ID. Do not accept a model-invented user_statement reference.
+        for raw_event in response.content.get("events", []):
+            if isinstance(raw_event, dict):
+                raw_event["evidence"] = [
+                    item for item in raw_event.get("evidence", [])
+                    if not isinstance(item, dict) or item.get("kind") != "user_statement"
+                ]
+        facts_by_news = {
+            news_id: {fact.fact_id: fact for fact in result.facts}
+            for news_id, result in processing_by_news.items()
+        }
+        old_evidence = {
+            (event.news_id, evidence.ref_id): evidence
+            for event in previous.events
+            for evidence in event.evidence
+            if evidence.kind == "analytics"
+        }
+        analytics_by_id = {
+            ref_id: type("StoredSnippet", (), {"text": evidence.quote})()
+            for (_, ref_id), evidence in old_evidence.items()
+        }
+        calculations_by_id = {
+            str(source.get("id")): source
+            for source in previous.sources_used
+            if source.get("type") == "calculation"
+        }
+        return validate_llm_insight(
+            response.content,
+            company_id=company.company_id,
+            requested_news_ids=[event.news_id for event in events],
+            facts_by_news=facts_by_news,
+            relationships=relationships,
+            analytics_by_id=analytics_by_id,
+            calculations_by_id=calculations_by_id,
+        )

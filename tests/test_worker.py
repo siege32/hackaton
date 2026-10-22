@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from sxsvn_intel.errors import LLMRetriesExhausted, StorageError
-from sxsvn_intel.models import JOB_NEWS_PROCESS, NewsJob, ProcessingStatus
-from sxsvn_intel.queue.memory import InMemoryQueue
-from sxsvn_intel.storage.memory import InMemoryIntelStore
-from sxsvn_intel.worker import NewsWorker, run_news_worker
+from ai_engine.errors import LLMRetriesExhausted, StorageError
+from ai_engine.models import JOB_NEWS_PROCESS, NewsJob, ProcessingStatus
+from ai_engine.queue.memory import InMemoryQueue
+from ai_engine.storage.memory import InMemoryIntelStore
+from ai_engine.worker import NewsWorker, run_news_worker
 from tests.helpers import FACT_PROMPT, GAS_NEWS, fact_payload, make_service, make_settings
 
 
@@ -112,7 +112,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(handled, 0)
 
     def test_empty_news_is_acked_after_failure_result_is_saved(self):
-        from sxsvn_intel.models import NewsRecord
+        from ai_engine.models import NewsRecord
 
         empty = NewsRecord(news_id="news-empty", title="", text="", source_id="s")
         service, store, *_ = make_service(news=[empty])

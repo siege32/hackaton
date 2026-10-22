@@ -3,14 +3,14 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from sxsvn_intel.errors import (
+from ai_engine.errors import (
     LLMInvalidResponseError,
     LLMProviderError,
     LLMRetriesExhausted,
     LLMTimeoutError,
 )
-from sxsvn_intel.llm.client import LLMClient
-from sxsvn_intel.llm.schemas import FactsResponse
+from ai_engine.llm.client import LLMClient
+from ai_engine.llm.schemas import FactsResponse
 from tests.helpers import make_settings
 
 

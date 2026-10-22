@@ -52,12 +52,23 @@ class LLMProviderError(LLMError):
 class LLMInvalidResponseError(LLMError):
     code = "llm_invalid_response"
 
+    def __init__(self, message: str, *, details: dict | None = None) -> None:
+        super().__init__(message, details=details)
+
 
 class LLMRetriesExhausted(LLMError):
     code = "llm_retries_exhausted"
 
     def __init__(self, message: str, *, attempts: int, last_error: Exception | None = None) -> None:
-        super().__init__(message, details={"attempts": attempts})
+        details = {"attempts": attempts}
+        if last_error is not None:
+            details["last_error"] = {
+                "type": type(last_error).__name__,
+                "message": str(last_error)[:800],
+                "code": getattr(last_error, "code", None),
+                "details": getattr(last_error, "details", {}),
+            }
+        super().__init__(message, details=details)
         self.attempts = attempts
         self.last_error = last_error
 

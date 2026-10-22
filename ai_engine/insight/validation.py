@@ -92,7 +92,15 @@ def validate_llm_insight(
         relevance = _enum(RelevanceClass, raw.get("relevance_class"), "relevance_class", RelevanceClass.REVIEW)
         if relevance == RelevanceClass.DROP:
             raise SchemaValidationError("DROP events must not be passed to synthesis")
-        direction = _enum(ImpactDirection, raw.get("impact_direction"), "impact_direction", ImpactDirection.UNKNOWN)
+        raw_direction = raw.get("impact_direction")
+        neutral_direction = isinstance(raw_direction, str) and raw_direction.strip().lower() == "neutral"
+        if neutral_direction:
+            # Neutral is not a supported direction in the public model. Treat
+            # it as unknown rather than rejecting otherwise grounded output.
+            raw_direction = ImpactDirection.UNKNOWN.value
+        direction = _enum(
+            ImpactDirection, raw_direction, "impact_direction", ImpactDirection.UNKNOWN
+        )
         impact_type = _enum(ImpactType, raw.get("impact_type"), "impact_type", ImpactType.UNKNOWN)
         horizon = _enum(ImpactHorizon, raw.get("impact_horizon"), "impact_horizon", ImpactHorizon.UNKNOWN)
 
@@ -177,6 +185,11 @@ def validate_llm_insight(
                 f"events[{index}] claims KEEP without any evidence"
             )
 
+        event_limitations = _string_list(raw.get("limitations"))
+        if neutral_direction:
+            event_limitations.append(
+                "LLM returned neutral direction; normalized to unknown because neutral is not a supported enum value"
+            )
         event = ImpactEvent(
             news_id=news_id,
             relevance_class=relevance,
@@ -195,7 +208,7 @@ def validate_llm_insight(
                 )
                 for e in evidence
             ],
-            limitations=_string_list(raw.get("limitations")),
+            limitations=_string_list(event_limitations),
             confidence=raw.get("confidence"),
             impact_horizon=horizon,
             chain=_string_list(raw.get("chain")),
