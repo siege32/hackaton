@@ -56,17 +56,12 @@ class LLMClientTests(unittest.TestCase):
         client = LLMClient(settings, client=sdk, sleep=sleeps.append)
         return client, sdk, sleeps
 
-    def test_timeout_is_retried_and_then_succeeds(self):
-        client, sdk, sleeps = self.client(
-            [APITimeoutError("timeout"), sdk_response('{"ok": true}')]
-        )
-        response = client.complete_json(
-            system_prompt="s", user_prompt="u", prompt_version="news-facts.v1"
-        )
-        self.assertEqual(response.content, {"ok": True})
-        self.assertEqual(response.attempts, 2)
-        self.assertEqual(len(sdk.calls), 2)
-        self.assertEqual(len(sleeps), 1)
+    def test_timeout_is_not_retried(self):
+        client, sdk, sleeps = self.client([APITimeoutError("timeout")])
+        with self.assertRaises(LLMTimeoutError):
+            client.complete_json(system_prompt="s", user_prompt="u", prompt_version="news-facts.v1")
+        self.assertEqual(len(sdk.calls), 1)
+        self.assertEqual(sleeps, [])
 
     def test_provider_500_exhausts_bounded_retries(self):
         client, sdk, _ = self.client(

@@ -141,6 +141,8 @@ class LLMClient:
                 self._log_attempt(
                     prompt_version, attempt, attempts_total, started, error=outcome
                 )
+                if self._is_timeout(exc):
+                    raise last_error from exc
                 if status is not None and status not in {408, 409, 425, 429} and status < 500:
                     raise last_error from exc
                 self._sleep(self._backoff(attempt))
