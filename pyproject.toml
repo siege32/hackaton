@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sxsvn-insight-engine"
+version = "0.1.0"
+description = "Evidence-first news classification and company impact analysis"
+requires-python = ">=3.11"
+dependencies = [
+    "cachetools>=5.3",
+    "openai>=1.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+]
+
+[project.scripts]
+sxsvn-news-worker = "ai_engine.worker_cli:main"
+
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
+# Распознавание PDF-аналитики банка (data_pipeline.reports.ocr): рендер страниц в PNG.
+ocr = ["pymupdf>=1.24"]
+# Сбор новостей (data_pipeline.news): выделение текста статьи из HTML.
+news = ["trafilatura>=2.0"]
+dev = ["pytest>=8.0", "redis>=5.0", "pymupdf>=1.24", "trafilatura>=2.0"]
+
+[tool.setuptools.packages.find]
+include = ["ai_engine*", "data_pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
