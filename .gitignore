@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# --- Данные кейса и производные артефакты (не коммитим: большие и не наши) ---
+data/raw/
+data/processed/
+*.sqlite
+*.sqlite-journal
