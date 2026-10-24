@@ -182,7 +182,7 @@ function renderFeed(items, target, limit = Infinity) {
     const lead = item.lead || item.text_quality || '';
     const chosen = state.selectedNews?.news_id === item.news_id ? 'selected' : '';
     return `<button class="feed-card ${chosen}" data-news-id="${escapeHtml(item.news_id)}">
-      <span class="feed-meta"><span>${escapeHtml(item.source_name || item.source_id || 'Источник')} · ${escapeHtml(dateLabel(item.published_at))}</span><span class="tag ${category}">${escapeHtml(label(item.prefilter || 'REVIEW'))}</span></span>
+      <span class="feed-meta"><span>${escapeHtml(item.source_name || item.source_id || 'Источник')} · <span class="feed-date">${escapeHtml(dateLabel(item.published_at))}</span></span><span class="tag ${category}">${escapeHtml(label(item.prefilter || 'REVIEW'))}</span></span>
       <span class="feed-title">${escapeHtml(title)}</span>
       ${lead ? `<span class="feed-lead">${escapeHtml(lead)}</span>` : ''}
       <span class="feed-foot">${Number(item.sources_in_cluster || 1)} ${pluralSources(item.sources_in_cluster || 1)}${item.novelty?.length ? ` · ${escapeHtml(item.novelty.length)} новых факта` : ''}</span>
@@ -490,7 +490,7 @@ function renderReports(items) {
   }
   $('#report-results').innerHTML = items.map(item => {
     const meta = item.metadata || {};
-    return `<article class="report-card"><div class="report-card-top"><span class="tag">${escapeHtml(meta.report_date || 'Дата не указана')}</span><span>${escapeHtml(meta.period || '')}</span>${meta.stale ? '<span class="tag review">Исторический материал</span>' : ''}${meta.ocr_confidence ? `<span class="tag">Точность OCR: ${escapeHtml(ocrLabels[meta.ocr_confidence] || meta.ocr_confidence)}</span>` : ''}</div><h2>${escapeHtml(item.title)}</h2><blockquote>${escapeHtml(item.text)}</blockquote><div class="report-card-foot"><span>${escapeHtml(item.source)}</span><span>Страница ${escapeHtml(meta.page ?? '—')} · релевантность ${escapeHtml(item.score ?? '—')}</span></div>${(meta.notes || []).map(note => `<div class="limitation">${escapeHtml(note)}</div>`).join('')}</article>`;
+    return `<article class="report-card"><div class="report-card-top"><span class="tag">${escapeHtml(meta.report_date || 'Дата не указана')}</span><span>${escapeHtml(meta.period || '')}</span>${meta.stale ? '<span class="tag review">Исторический материал</span>' : ''}${meta.ocr_confidence ? `<span class="tag">Точность OCR: ${escapeHtml(ocrLabels[meta.ocr_confidence] || meta.ocr_confidence)}</span>` : ''}</div><h2>${escapeHtml(item.title)}</h2><blockquote>${escapeHtml(item.text)}</blockquote><div class="report-card-foot"><span>${escapeHtml(item.source)}</span><span>Страница ${escapeHtml(meta.page ?? '—')} · релевантность ${item.score == null ? '—' : escapeHtml(Number(item.score).toFixed(2).replace('.', ','))}</span></div>${(meta.notes || []).map(note => `<div class="limitation">${escapeHtml(note)}</div>`).join('')}</article>`;
   }).join('');
 }
 

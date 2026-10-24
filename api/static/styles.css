@@ -345,9 +345,8 @@ h1 { font: 700 32px/1.2 'Manrope', 'Segoe UI', sans-serif; letter-spacing: -.5px
 }
 
 /* Поправки после увеличения шрифтов (отчёт проверки вёрстки 24.10). */
-.tag, .button, .archive-count, .service-chip, .feed-meta > span:first-child { white-space: nowrap; }
+.tag, .button, .archive-count, .service-chip, .feed-date { white-space: nowrap; }
 .tag { flex-shrink: 0; }
-.feed-meta > span:first-child { overflow: hidden; text-overflow: ellipsis; }
 .nav-item { white-space: nowrap; }
 .connection-card small { overflow-wrap: anywhere; }
 .data-panel .source-row { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content; gap: 10px; align-items: center; }
@@ -366,4 +365,9 @@ h1 { font: 700 32px/1.2 'Manrope', 'Segoe UI', sans-serif; letter-spacing: -.5px
   .data-panel .source-row strong { flex: 1 1 100%; overflow-wrap: anywhere; }
   .bar-item { grid-template-columns: 1fr 52px; }
   .bar-item .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (max-width: 420px) {
+  /* правило ≤1050 px выше возвращало подписи меню: на телефоне только иконки */
+  .nav-item { width: 35px; justify-content: center; padding: 0; font-size: 0; }
+  .nav-glyph { font-size: 17px; }
 }
