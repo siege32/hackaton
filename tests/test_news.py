@@ -15,7 +15,7 @@ from data_pipeline.news import (SqliteNewsRepository, add_manual_text, cluster_s
 from data_pipeline.news.clean import clean_article, normalize_text, normalize_url
 from data_pipeline.news.dedup import novelty
 from data_pipeline.news.fetch import FetchError, parse_date, parse_rss
-from data_pipeline.news.prefilter import DROP, KEEP, REVIEW, prefilter
+from data_pipeline.news.prefilter import DROP, KEEP, NO_TEXT_REASON, REVIEW, prefilter
 from data_pipeline.news.sources import NewsSource
 
 NOW = datetime.now(timezone.utc)
@@ -114,6 +114,12 @@ class PrefilterTest(unittest.TestCase):
     def test_summary_only_needs_review(self):
         self.assertEqual(prefilter("Пошлины на импорт", "Анонс", text_quality="summary_only").decision, REVIEW)
 
+    def test_title_only_dropped(self):
+        # ТАСС: страница закрыта (403), в RSS нет анонса — остаётся один заголовок.
+        result = prefilter("Санкции против банков", "", text_quality="summary_only")
+        self.assertEqual(result.decision, DROP)
+        self.assertEqual(result.reasons, [NO_TEXT_REASON])
+
 
 class NoveltyTest(unittest.TestCase):
     def test_new_numbers_and_denial(self):
@@ -146,6 +152,21 @@ class PipelineTest(unittest.TestCase):
         a = fetch_source(self.conn, self.rss_source, download=self.download)
         b = fetch_source(self.conn, self.page_source, download=self.download)
         return a, b
+
+    def test_textless_record_dropped_on_open(self):
+        # Запись без текста, сохранённая старой версией предотбора как REVIEW.
+        self.run_both()
+        news_id = self.conn.execute("SELECT news_id FROM news LIMIT 1").fetchone()[0]
+        with self.conn:
+            self.conn.execute("UPDATE news SET text = '', prefilter = 'REVIEW', should_process = 1 "
+                              "WHERE news_id = ?", (news_id,))
+        self.conn.close()
+        self.conn = open_news_db(Path(self.tmp.name) / "news.sqlite")
+        row = self.conn.execute("SELECT prefilter, should_process FROM news WHERE news_id = ?",
+                                (news_id,)).fetchone()
+        self.assertEqual((row[0], row[1]), (DROP, 0))
+        others = self.conn.execute("SELECT count(*) FROM news WHERE prefilter != 'DROP'").fetchone()[0]
+        self.assertGreater(others, 0)
 
     def test_fetch_prefilter_cluster_and_novelty(self):
         a, b = self.run_both()
