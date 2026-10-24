@@ -238,6 +238,8 @@ async function selectNews(newsId) {
   renderFeed(state.news, '#full-feed');
   const detail = state.currentView === 'news' ? $('#news-detail') : $('#analysis-content');
   if (detail) {
+    // На узком экране карточка события стоит под лентой — прокручиваем к ней.
+    if (window.matchMedia('(max-width: 760px)').matches) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
     detail.classList.remove('hidden');
     $('#analysis-empty')?.classList.add('hidden');
     $('#overview-analysis')?.classList.add('has-content');
