@@ -26,6 +26,13 @@ _HIGH_SHARE = 0.20
 _MEDIUM_SHARE = 0.05
 _MAX_GROUP_LINKS = 10
 _DIRECTION_RU = {"incoming": "входящих", "outgoing": "исходящих"}
+#: Подпись связи для интерфейса (``metadata.label``); значения контракта ai_engine не меняются.
+_KIND_LABELS = {
+    ("payment", "incoming"): "входящие платежи",
+    ("payment", "outgoing"): "исходящие платежи",
+    ("shared_person", None): "общие связанные физлица",
+    ("same_group", None): "одна группа компаний",
+}
 
 
 def _significance(share: float | None) -> Significance:
@@ -82,13 +89,14 @@ class PaymentRelationshipRepository:
                         source=PAYMENTS_CSV,
                         metadata={
                             "kind": "payment",
+                            "label": _KIND_LABELS[("payment", direction)],
                             "amount": f["amount"],
                             "payments_count": f["pay_cnt"],
                             "counterparty_identified": bool(f["identified"]),
                             "counterparty_okved_code": f["okved_code"],
                             "counterparty_okved_section": f["okved_section"],
                             "counterparty_region": f["region"],
-                            "period": "не указан в данных",
+                            "period": "период не указан в данных",
                         },
                     )
                 )
@@ -126,6 +134,7 @@ class PaymentRelationshipRepository:
                 source=PERSON_LINKS_CSV,
                 metadata={
                     "kind": "shared_person",
+                    "label": _KIND_LABELS[("shared_person", None)],
                     "shared_persons": r["persons"],
                     "counterparty_identified": bool(r["identified"]),
                     "counterparty_okved_section": r["okved_section"],
@@ -159,6 +168,7 @@ class PaymentRelationshipRepository:
                 source=COMPANIES_CSV,
                 metadata={
                     "kind": "same_group",
+                    "label": _KIND_LABELS[("same_group", None)],
                     "group_id": r["group_id"],
                     "counterparty_okved_section": r["okved_section"],
                     "counterparty_revenue": r["revenue"],

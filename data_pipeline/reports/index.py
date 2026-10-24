@@ -175,7 +175,7 @@ class BankReportsIndex:
             title=title,
             text=chunk.text,
             source=f"Альфа-Банк, «{title}», {when}, стр. {chunk.page}",
-            score=round(score, 4),
+            score=round(score, 2),
             url=None,
             metadata={
                 "document_id": chunk.document_id,
