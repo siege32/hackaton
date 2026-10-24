@@ -190,7 +190,7 @@ def build_profile(conn: sqlite3.Connection, company_id: str) -> CompanyProfile |
 
     revenue = c["revenue"]
     financials = {
-        "revenue": {"value": revenue, "currency": CURRENCY, "period": "не указан в данных",
+        "revenue": {"value": revenue, "currency": CURRENCY, "period": "период не указан в данных",
                     "source": f"{COMPANIES_CSV}:REVENUE_COMPANY"},
         "size_segment": None if revenue is None else (
             "крупный бизнес (выручка > 15 млрд)" if revenue >= LARGE_BUSINESS_REVENUE_RUB else "не крупный бизнес"
@@ -206,7 +206,7 @@ def build_profile(conn: sqlite3.Connection, company_id: str) -> CompanyProfile |
         "group": group,
         "payments": {
             "currency": CURRENCY,
-            "period": "не указан в данных",
+            "period": "период не указан в данных",
             "incoming": _payment_summary(incoming),
             "outgoing": _payment_summary(outgoing),
         },
@@ -269,9 +269,22 @@ class SqliteCompanyRepository:
         params += [limit, offset]
         rows = self.conn.execute(" ".join(sql), params).fetchall()
         return [
-            {**dict(r), "industry": okved.SECTION_NAMES.get(r["okved_section"])}
+            {**dict(r), "industry": okved.SECTION_NAMES.get(r["okved_section"]), "display_name": _display_name(r)}
             for r in rows
         ]
+
+
+def _display_name(row: sqlite3.Row) -> str:
+    """Подпись для списка выбора: данные обезличены, отличаем компании по виду деятельности, региону и выручке."""
+    activity = row["okved_name"] or "вид деятельности не указан"
+    if len(activity) > 60:
+        activity = activity[:59].rstrip(" ,;") + "…"
+    parts = [activity]
+    if row["region"]:
+        parts.append(row["region"])
+    if row["revenue"] is not None:
+        parts.append(f"{row['revenue'] / 1e9:,.1f} млрд".replace(",", " ").replace(".", ","))
+    return " · ".join(parts)
 
 
 def get_company_profile(conn: sqlite3.Connection, company_id: str) -> dict[str, Any]:
