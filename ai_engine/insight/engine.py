@@ -70,6 +70,45 @@ def _dedupe_strings(items: Iterable[str]) -> list[str]:
     return result
 
 
+_DEFAULT_NOT_RELEVANT_REASON = "связь события с профилем компании не подтверждена"
+_NOT_RELEVANT_TITLE = "Новость не относится к компании"
+
+
+def _assessment_reason(assessment: CompanyNewsAssessment) -> str:
+    """Return the most specific explanation produced by the classifier."""
+    for candidate in (
+        assessment.reasoning_summary,
+        assessment.impact_mechanism,
+        assessment.limitations[0] if assessment.limitations else "",
+    ):
+        text = (candidate or "").strip()
+        if text:
+            return text
+    return _DEFAULT_NOT_RELEVANT_REASON
+
+
+def _not_relevant_summary(reasons: list[tuple[str, str]]) -> str:
+    """Build a Russian user-facing explanation for filtered news.
+
+    ``reasons`` contains ``(news_id, reason)`` pairs. A single news item gets
+    a short sentence; several items are listed with their ids so the user can
+    tell which event each reason belongs to.
+    """
+    cleaned = [
+        (news_id, (reason or "").strip() or _DEFAULT_NOT_RELEVANT_REASON)
+        for news_id, reason in reasons
+    ]
+    if not cleaned:
+        return f"{_NOT_RELEVANT_TITLE}. Причина: {_DEFAULT_NOT_RELEVANT_REASON}."
+    if len(cleaned) == 1:
+        reason = cleaned[0][1]
+        if not reason.endswith((".", "!", "?")):
+            reason += "."
+        return f"{_NOT_RELEVANT_TITLE}. Причина: {reason}"
+    details = "; ".join(f"{news_id}: {reason}" for news_id, reason in cleaned)
+    return f"Новости не относятся к компании. Причины: {details}"
+
+
 def _profile_gaps(profile: CompanyProfile) -> list[str]:
     gaps = []
     if not profile.industry:
@@ -131,7 +170,7 @@ class InsightEngine:
         event_ids: Sequence[str],
         *,
         include_review: bool = True,
-        include_drop: bool = False,
+        include_drop: bool | None = None,
         auto_classify: bool = False,
         save: bool = True,
     ) -> InsightResult:
@@ -177,6 +216,7 @@ class InsightEngine:
         items: list[tuple[NewsProcessingResult, CompanyNewsAssessment, str]] = []
         unavailable_events: list[str] = []
         filtered_events: list[str] = []
+        dropped_items: list[tuple[NewsProcessingResult, CompanyNewsAssessment, str]] = []
         stale_or_missing: list[str] = []
 
         for news_id in requested:
@@ -212,8 +252,11 @@ class InsightEngine:
                 unavailable_events.append(news_id)
                 stale_or_missing.append(f"{news_id}: stale assessment")
                 continue
-            if assessment.relevance_class == RelevanceClass.DROP and not include_drop:
+            if assessment.relevance_class == RelevanceClass.DROP and include_drop is not True:
+                # Keep the assessment so a DROP-only analysis can still
+                # explain itself to the UI instead of returning empty metrics.
                 filtered_events.append(news_id)
+                dropped_items.append((processing, assessment, news_text))
                 continue
             if assessment.relevance_class == RelevanceClass.REVIEW and not include_review:
                 filtered_events.append(news_id)
@@ -264,27 +307,17 @@ class InsightEngine:
 
         for index, event in enumerate(events):
             processing, assessment, _ = items[index]
-            sources.append(
-                {
-                    "type": "news",
-                    "id": processing.news_id,
-                    "source_id": processing.source_id,
-                    "version": processing.content_version,
-                }
-            )
-            for evidence in assessment.evidence:
-                sources.append(
-                    {"type": "fact", "id": evidence.fact_id, "news_id": processing.news_id}
-                )
-            for link in event.evidence:
-                if link.kind == "relationship":
-                    sources.append(
-                        {
-                            "type": "relationship",
-                            "id": link.ref_id,
-                            "confirmed": link.confirmed,
-                        }
-                    )
+            self._append_event_sources(sources, processing, assessment, event)
+
+        # A DROP-only analysis must still carry enough information for the UI:
+        # relevance, direction and horizon are read from the first event.
+        drop_explanations: list[tuple[str, str]] = []
+        if not events and dropped_items and include_drop is None:
+            for processing, assessment, news_text in dropped_items:
+                event = self._build_event(assessment, processing, relationships, news_text)
+                events.append(event)
+                self._append_event_sources(sources, processing, assessment, event)
+                drop_explanations.append((processing.news_id, _assessment_reason(assessment)))
 
         # --- optional LLM synthesis --------------------------------------
         llm_failed = False
@@ -317,7 +350,19 @@ class InsightEngine:
                 limitations.append(f"LLM synthesis failed: {type(exc).__name__}")
                 self._logger.warning("insight LLM synthesis crashed company_id=%s", company_id)
 
-        if synthesis is not None:
+        if not drop_explanations and events and all(
+            event.relevance_class == RelevanceClass.DROP for event in events
+        ):
+            drop_explanations = [
+                (event.news_id, event.mechanism or _DEFAULT_NOT_RELEVANT_REASON)
+                for event in events
+            ]
+
+        if drop_explanations:
+            summary = _not_relevant_summary(drop_explanations)
+            key_risks, opportunities = self._derive_risks_and_opportunities(events)
+            recommended = self._default_checks(events, company, relationships)
+        elif synthesis is not None:
             events = synthesis.events
             summary = synthesis.summary or self._default_summary(company, events)
             key_risks = synthesis.key_risks
@@ -332,8 +377,11 @@ class InsightEngine:
             recommended = self._default_checks(events, company, relationships)
 
         # --- status -------------------------------------------------------
-        analytics_unavailable = analytics_unavailable or self.analytics is None
-        if self.analytics is None:
+        drop_only = bool(events) and all(
+            event.relevance_class == RelevanceClass.DROP for event in events
+        )
+        analytics_unavailable = analytics_unavailable or (self.analytics is None and not drop_only)
+        if self.analytics is None and not drop_only:
             limitations.append(
                 "banking analytics index is not configured; no banking analytics was used"
             )
@@ -345,7 +393,7 @@ class InsightEngine:
                 status = AnalysisStatus.FAILED
             else:
                 status = AnalysisStatus.COMPLETED
-                unknowns.append("none of the requested events passed the relevance filter")
+                unknowns.append("ни одна из запрошенных новостей не прошла фильтр релевантности")
         elif unavailable_events or analytics_unavailable or llm_failed:
             status = AnalysisStatus.PARTIAL
         else:
@@ -360,8 +408,8 @@ class InsightEngine:
             + [f"{e.news_id}: {lim}" for e in events for lim in e.limitations]
         )
         limitations = _dedupe_strings(limitations)
-        if filtered_events:
-            summary += f" {len(filtered_events)} event(s) were skipped by the relevance filter."
+        if filtered_events and not drop_explanations:
+            summary += f" Отфильтровано по релевантности событий: {len(filtered_events)}."
 
         analysis_id = stable_id(
             "analysis",
@@ -402,6 +450,35 @@ class InsightEngine:
         return result
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _append_event_sources(
+        sources: list[dict[str, Any]],
+        processing: NewsProcessingResult,
+        assessment: CompanyNewsAssessment,
+        event: ImpactEvent,
+    ) -> None:
+        sources.append(
+            {
+                "type": "news",
+                "id": processing.news_id,
+                "source_id": processing.source_id,
+                "version": processing.content_version,
+            }
+        )
+        for evidence in assessment.evidence:
+            sources.append(
+                {"type": "fact", "id": evidence.fact_id, "news_id": processing.news_id}
+            )
+        for link in event.evidence:
+            if link.kind == "relationship":
+                sources.append(
+                    {
+                        "type": "relationship",
+                        "id": link.ref_id,
+                        "confirmed": link.confirmed,
+                    }
+                )
+
     def _news_text(self, news_id: str, processing: NewsProcessingResult) -> str:
         if self.news is not None:
             try:
@@ -610,12 +687,19 @@ class InsightEngine:
                 )
 
         direction = assessment.impact_direction
-        consequences = self._consequences(direction, assessment.impact_mechanism)
-        chain = self._chain(processing, assessment)
+        if assessment.relevance_class == RelevanceClass.DROP:
+            mechanism = _assessment_reason(assessment)
+            consequences: list[str] = []
+            chain: list[str] = []
+            hypothesis = False
+        else:
+            mechanism = assessment.impact_mechanism
+            consequences = self._consequences(direction, assessment.impact_mechanism)
+            chain = self._chain(processing, assessment)
+            if direction == ImpactDirection.UNKNOWN:
+                hypothesis = True
         if assessment.relevance_class == RelevanceClass.KEEP and not evidence:
             limitations.append("KEEP conclusion has no usable evidence after validation")
-            hypothesis = True
-        if direction == ImpactDirection.UNKNOWN:
             hypothesis = True
         if any(e.kind in {"inference", "hypothesis"} for e in evidence):
             hypothesis = True
@@ -625,7 +709,7 @@ class InsightEngine:
             relevance_class=assessment.relevance_class,
             impact_direction=direction,
             impact_type=assessment.impact_type,
-            mechanism=assessment.impact_mechanism,
+            mechanism=mechanism,
             potential_consequences=consequences,
             evidence=evidence,
             limitations=_dedupe_strings(limitations),
@@ -713,13 +797,17 @@ class InsightEngine:
     @staticmethod
     def _default_summary(company: CompanyProfile, events: list[ImpactEvent]) -> str:
         if not events:
-            return f"No relevant events were available for {company.name}."
+            return f"Нет доступных событий для компании {company.name}."
         keep = sum(1 for e in events if e.relevance_class == RelevanceClass.KEEP)
-        review = len(events) - keep
+        review = sum(1 for e in events if e.relevance_class == RelevanceClass.REVIEW)
+        drop = sum(1 for e in events if e.relevance_class == RelevanceClass.DROP)
+        counts = [f"связано: {keep}", f"требует проверки: {review}"]
+        if drop:
+            counts.append(f"не связано: {drop}")
         return (
-            f"Analyzed {len(events)} event(s) for {company.name}: "
-            f"KEEP={keep}, REVIEW={review}. Conclusions are potential effects, "
-            "not realized losses; see evidence and limitations per event."
+            f"Проанализировано событий для {company.name}: {len(events)} "
+            f"({', '.join(counts)}). Выводы — потенциальные эффекты, а не реализованные "
+            "убытки; основания и ограничения указаны для каждого события."
         )
 
     @staticmethod

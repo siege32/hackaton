@@ -218,6 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Agent action log (local only)
+ai_engine/agent_actions.log
 # --- Данные кейса и производные артефакты (не коммитим: большие и не наши) ---
 data/raw/
 data/processed/
