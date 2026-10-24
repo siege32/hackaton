@@ -14,8 +14,8 @@ from ..models import CompanyContext, CompanyNewsAssessment, InsightResult, NewsP
 from ..utils import jsonable, truncate_text
 
 PROMPT_VERSIONS = {
-    "facts": "news-facts.v1",
-    "company_assessment": "company-relevance.v1",
+    "facts": "news-facts.v2",
+    "company_assessment": "company-relevance.v2",
     "insight": "company-insight.v1",
     "adaptation": "company-adaptation.v3",
 }
@@ -87,7 +87,7 @@ def facts_prompts(news_fields: dict[str, Any], max_chars: int) -> tuple[str, str
 - quantities[].value — число, если его можно однозначно прочитать из raw; raw сохраняй как в тексте. Ничего не пересчитывай.
 - Не добавляй факты, которых нет в тексте. Если фактов нет, верни пустой список facts.
 """
-    return system, "Данные новости:\n" + _json(payload)
+    return system + "\nLimit the output to at most 12 material facts. Keep each fact concise and each quote to one short verbatim sentence. Return no more than 3 main_events.", "Данные новости:\n" + _json(payload)
 
 
 def company_assessment_prompts(context: CompanyContext, news: NewsProcessingResult) -> tuple[str, str]:
@@ -136,6 +136,7 @@ def company_assessment_prompts(context: CompanyContext, news: NewsProcessingResu
 - KEEP: есть обоснованный механизм связи с компанией (прямой или через подтверждённую зависимость/рынок).
 - DROP: после проверки доступных данных значимая связь не обнаружена.
 - REVIEW: связь неоднозначна, профиль неполон, данных недостаточно или источники противоречат друг другу.
+- Если для вывода о связи не хватает сведений об операциях, маршрутах, объектах или контрагентах компании, выбирай REVIEW, а не DROP; перечисли конкретные пробелы в missing_data.
 - Отсутствие названия компании в тексте НЕ является основанием для DROP.
 - Совпадение отрасли само по себе НЕ является основанием для KEEP.
 - Неизвестная зависимость не является подтверждённым фактом. Платёжная ссылка/отдельный платёж не доказывают зависимость.

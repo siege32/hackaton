@@ -1,11 +1,17 @@
 const API = '/api/v1';
+const ANALYSIS_CACHE_KEY = 'sxsvn.analysis-cache.v1';
 const state = {
   companies: [],
+  overviewNews: [],
   news: [],
   selectedNews: null,
   analysis: null,
+  analysisCache: {},
+  activeAnalysisContext: null,
+  selectionRequest: 0,
   activeJob: null,
   companyId: '',
+  currentView: 'overview',
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -69,12 +75,45 @@ function setBusy(button, busy, busyText = 'Подождите…') {
 }
 
 function showView(name) {
+  state.currentView = name;
+  state.selectionRequest += 1;
   $$('.page-view').forEach(view => view.classList.toggle('active', view.id === `view-${name}`));
   $$('.nav-item').forEach(button => button.classList.toggle('active', button.dataset.view === name));
   const title = ({ overview: 'Обзор', news: 'События', company: 'Компания', reports: 'Аналитика банка' })[name];
   $('#view-title').textContent = title;
   if (name === 'company' && state.companyId) loadCompany(state.companyId);
   if (name === 'news') loadNews(true);
+  if (name === 'overview' && state.selectedNews) selectNews(state.selectedNews.news_id);
+}
+
+function analysisKey(companyId, newsId) {
+  return `${companyId}::${newsId}`;
+}
+
+function cachedAnalysis(companyId, newsId) {
+  return state.analysisCache[analysisKey(companyId, newsId)] || null;
+}
+
+function rememberAnalysis(result, status, context = state.activeAnalysisContext) {
+  if (!result || !context?.companyId || !context?.newsId) return;
+  const key = analysisKey(context.companyId, context.newsId);
+  state.analysisCache[key] = { result, status, savedAt: new Date().toISOString() };
+  const recent = Object.entries(state.analysisCache)
+    .sort(([, a], [, b]) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')))
+    .slice(0, 40);
+  state.analysisCache = Object.fromEntries(recent);
+  try { localStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(state.analysisCache)); } catch { /* session cache still works */ }
+}
+
+function restoreAnalysisCache() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ANALYSIS_CACHE_KEY) || '{}');
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+      state.analysisCache = Object.fromEntries(Object.entries(saved).filter(([, entry]) =>
+        entry && typeof entry === 'object' && entry.result && typeof entry.result === 'object'
+      ));
+    }
+  } catch { state.analysisCache = {}; }
 }
 
 function statusChip(name, ready) {
@@ -157,68 +196,99 @@ function pluralSources(count) {
 }
 
 async function loadNews(full = false, query = null) {
-  const activeQuery = query ?? (full ? $('#full-news-search')?.value : $('#news-search')?.value) ?? '';
   try {
-    let response;
-    if (activeQuery.trim()) {
-      const params = new URLSearchParams({ query: activeQuery.trim(), limit: '30' });
-      const result = await api(`/news/search?${params}`);
-      response = { items: result.data || [] };
-    } else {
-      const filter = full ? $('#full-relevance-filter')?.value : $('#relevance-filter')?.value;
-      const params = new URLSearchParams({ limit: '40', prefilter: filter || 'KEEP,REVIEW' });
-      response = await api(`/news?${params}`);
+    if (full) {
+      const activeQuery = query ?? $('#full-news-search')?.value ?? '';
+      let response;
+      if (activeQuery.trim()) {
+        const params = new URLSearchParams({ query: activeQuery.trim(), limit: '30' });
+        const result = await api(`/news/search?${params}`);
+        response = { items: result.data || [] };
+      } else {
+        const params = new URLSearchParams({ limit: '100' });
+        ($('#full-relevance-filter')?.value || 'KEEP,REVIEW,DROP')
+          .split(',').filter(Boolean).forEach(value => params.append('prefilter', value));
+        response = await api(`/news?${params}`);
+      }
+      state.news = response.items || [];
+      $('#full-news-count').textContent = `${state.news.length} событий`;
+      renderFeed(state.news, '#full-feed');
+      return;
     }
-    state.news = response.items || [];
-    $('#news-count').textContent = String(state.news.length).padStart(2, '0');
-    $('#full-news-count').textContent = `${state.news.length} событий`;
-    renderFeed(state.news, '#overview-feed', 6);
-    renderFeed(state.news, '#full-feed');
+
+    const params = new URLSearchParams({ limit: '40' });
+    ['KEEP', 'REVIEW'].forEach(value => params.append('prefilter', value));
+    const response = await api(`/news?${params}`);
+    state.overviewNews = response.items || [];
+    $('#news-count').textContent = String(state.overviewNews.length).padStart(2, '0');
+    renderFeed(state.overviewNews, '#overview-feed', 6);
   } catch (error) {
-    $('#overview-feed').innerHTML = `<div class="empty-inline">${escapeHtml(error.message)}</div>`;
-    $('#full-feed').innerHTML = `<div class="empty-inline">${escapeHtml(error.message)}</div>`;
+    const target = full ? '#full-feed' : '#overview-feed';
+    $(target).innerHTML = `<div class="empty-inline">${escapeHtml(error.message)}</div>`;
   }
 }
 
 async function selectNews(newsId) {
-  const item = state.news.find(news => news.news_id === newsId);
+  const item = [...state.overviewNews, ...state.news].find(news => news.news_id === newsId);
   if (!item) return;
   state.selectedNews = item;
-  renderFeed(state.news, '#overview-feed', 6);
+  const requestId = ++state.selectionRequest;
+  state.analysis = null;
+  renderFeed(state.overviewNews, '#overview-feed', 6);
   renderFeed(state.news, '#full-feed');
-  const detail = $('#news-detail');
-  if (detail) detail.innerHTML = '<div class="loading-row">Загружаю публикации…</div>';
+  const detail = state.currentView === 'news' ? $('#news-detail') : $('#analysis-content');
+  if (detail) {
+    detail.classList.remove('hidden');
+    $('#analysis-empty')?.classList.add('hidden');
+    $('#overview-analysis')?.classList.add('has-content');
+    detail.innerHTML = '<div class="loading-row">Загружаю публикацию…</div>';
+  }
   try {
     const payload = await api(`/news/${encodeURIComponent(newsId)}`);
+    if (requestId !== state.selectionRequest) return;
     state.selectedNews = { ...item, ...payload.news, ...payload.news.metadata, sources: payload.sources || [] };
-    if (detail) renderNewsDetail(payload);
+    if (detail) {
+      const saved = cachedAnalysis(state.companyId, newsId);
+      if (saved) {
+        state.analysis = saved.result;
+        renderAnalysis(saved.result, saved.status || 'completed');
+      } else {
+        renderNewsDetail(payload, detail);
+      }
+    }
   } catch (error) {
+    if (requestId !== state.selectionRequest) return;
     if (detail) detail.innerHTML = `<div class="empty-inline">${escapeHtml(error.message)}</div>`;
   }
-  showAnalysisEmpty();
-  $('#overview-analysis').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function renderNewsDetail(payload) {
+function renderNewsDetail(payload, target) {
+  $('#overview-analysis')?.classList.add('has-content');
   const news = payload.news;
   const sources = payload.sources || [];
-  $('#news-detail').innerHTML = `<p class="eyebrow">СОБЫТИЕ · ${escapeHtml(label(news.metadata?.prefilter || state.selectedNews.prefilter))}</p>
+  target.innerHTML = `<div class="selected-news-detail"><p class="eyebrow">СОБЫТИЕ · ${escapeHtml(label(news.metadata?.prefilter || state.selectedNews.prefilter))}</p>
     <h2 class="detail-title">${escapeHtml(news.title || 'Без заголовка')}</h2>
     <div class="feed-foot">${escapeHtml(state.selectedNews.source_name || news.source_id)} · ${escapeHtml(dateLabel(news.published_at))}</div>
-    <p class="detail-body">${escapeHtml(news.text || '')}</p>
+    <p class="detail-body">${escapeHtml(news.text || news.lead || 'Полный текст публикации недоступен.')}</p>
     <h3 class="result-section">Первоисточники</h3>
     ${sources.map(source => `<div class="source-row"><span class="tag">${escapeHtml(source.source_name || source.source_id)}</span><span>${escapeHtml(dateLabel(source.published_at))}</span>${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Открыть ↗</a>` : ''}</div>`).join('') || '<p class="empty-inline">Данные об источниках не найдены.</p>'}
-    <div class="news-actions"><button class="button button-primary" id="analyze-selected">${state.companyId ? 'Разобрать для компании' : 'Сначала выберите компанию'}</button></div>`;
-  $('#analyze-selected').disabled = !state.companyId;
-  $('#analyze-selected').addEventListener('click', runAnalysis);
+    <div class="news-actions"><button class="button button-primary" data-analyze-selected>${state.companyId ? 'Разобрать для компании' : 'Сначала выберите компанию'}</button></div></div>`;
+  const analyzeButton = $('[data-analyze-selected]', target);
+  analyzeButton.disabled = !state.companyId;
+  analyzeButton.addEventListener('click', runAnalysis);
 }
 
 function showAnalysisEmpty() {
   $('#analysis-empty').classList.remove('hidden');
   $('#analysis-content').classList.add('hidden');
+  $('#overview-analysis')?.classList.remove('has-content');
 }
 
 function showAnalysisProgress(stage = 'Подготовка анализа', progress = 0) {
+  if (state.currentView === 'news') {
+    $('#news-detail').innerHTML = `<div class="job-progress"><span class="spinner"></span><span>${escapeHtml(stage)}</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, Math.max(4, progress * 100))}%"></div></div><p class="empty-copy">Анализ события и его влияния на компанию.</p>`;
+    return;
+  }
   $('#analysis-empty').classList.add('hidden');
   const content = $('#analysis-content');
   content.classList.remove('hidden');
@@ -227,6 +297,7 @@ function showAnalysisProgress(stage = 'Подготовка анализа', pro
 
 async function runAnalysis() {
   if (!state.companyId || !state.selectedNews) return;
+  state.activeAnalysisContext = { companyId: state.companyId, newsId: state.selectedNews.news_id };
   showAnalysisProgress('Отправка новости в конвейер', 0.03);
   try {
     const job = await api('/analysis', {
@@ -234,18 +305,23 @@ async function runAnalysis() {
       body: JSON.stringify({ company_id: state.companyId, event_ids: [state.selectedNews.news_id] }),
     });
     state.activeJob = job.job_id;
-    await pollJob(job.job_id);
+    await pollJob(job.job_id, state.activeAnalysisContext);
   } catch (error) {
     renderJobError(error.message);
   }
 }
 
-async function pollJob(jobId) {
+async function pollJob(jobId, context = state.activeAnalysisContext) {
   for (let attempt = 0; attempt < 360; attempt += 1) {
-    const job = await api(`/jobs/${encodeURIComponent(jobId)}`);
+    let job;
+    try { job = await api(`/jobs/${encodeURIComponent(jobId)}`); }
+    catch (error) { renderJobError(`Не удалось проверить статус задачи: ${error.message}`); return; }
     if (job.status === 'completed' || job.status === 'partial') {
-      state.analysis = job.result;
-      renderAnalysis(job.result, job.status);
+      rememberAnalysis(job.result, job.status, context);
+      if (state.companyId === context?.companyId && state.selectedNews?.news_id === context?.newsId) {
+        state.analysis = job.result;
+        renderAnalysis(job.result, job.status);
+      }
       return;
     }
     if (job.status === 'failed') {
@@ -259,6 +335,12 @@ async function pollJob(jobId) {
 }
 
 function renderJobError(message) {
+  if (state.currentView === 'news') {
+    const target = $('#news-detail');
+    target.innerHTML = `<div class="eyebrow">НЕ УДАЛОСЬ ЗАВЕРШИТЬ</div><p class="limitation">${escapeHtml(message)}</p><button class="button button-secondary" data-retry-analysis>Повторить запуск</button>`;
+    $('[data-retry-analysis]', target).addEventListener('click', runAnalysis);
+    return;
+  }
   $('#analysis-empty').classList.add('hidden');
   const content = $('#analysis-content');
   content.classList.remove('hidden');
@@ -267,8 +349,9 @@ function renderJobError(message) {
 }
 
 function renderAnalysis(result, status) {
-  $('#analysis-empty').classList.add('hidden');
-  const content = $('#analysis-content');
+  if (state.currentView !== 'news') $('#analysis-empty').classList.add('hidden');
+  const content = state.currentView === 'news' ? $('#news-detail') : $('#analysis-content');
+  $('#overview-analysis')?.classList.add('has-content');
   content.classList.remove('hidden');
   const title = state.selectedNews?.title || state.selectedNews?.news_id || 'Анализ события';
   const events = result.events || [];
@@ -298,8 +381,8 @@ function renderAnalysis(result, status) {
     ${result.recommended_checks?.length ? `<section class="result-section"><h3>Что проверить</h3>${result.recommended_checks.map(item => `<div class="claim"><p>${escapeHtml(item)}</p></div>`).join('')}</section>` : ''}
     <div class="news-actions"><button class="button button-secondary" id="show-refinement">Добавить уточнение</button></div>
     <form id="refinement-form" class="stack-form hidden"><label>Уточнение пользователя<textarea name="text" required minlength="3" rows="3" placeholder="Например: кредитный портфель полностью зафиксирован до 2028 года"></textarea></label><label>Что уточняем<select name="kind"><option value="dependency">Зависимость</option><option value="business_model">Бизнес-модель</option><option value="product">Продукт</option><option value="region">Регион</option><option value="other">Другое</option></select></label><button class="button button-primary" type="submit">Пересчитать анализ</button></form>`;
-  $('#show-refinement').addEventListener('click', () => $('#refinement-form').classList.toggle('hidden'));
-  $('#refinement-form').addEventListener('submit', submitRefinement);
+  $('#show-refinement', content).addEventListener('click', () => $('#refinement-form', content).classList.toggle('hidden'));
+  $('#refinement-form', content).addEventListener('submit', submitRefinement);
 }
 
 async function submitRefinement(event) {
@@ -308,6 +391,7 @@ async function submitRefinement(event) {
   const data = new FormData(form);
   const button = $('button[type="submit"]', form);
   const done = setBusy(button, true, 'Пересчёт…');
+  state.activeAnalysisContext = { companyId: state.companyId, newsId: state.selectedNews?.news_id };
   showAnalysisProgress('Сохранение уточнения пользователя', 0.1);
   try {
     const queued = await api(`/analysis/${encodeURIComponent(state.analysis.analysis_id)}/refinements`, {
@@ -413,14 +497,16 @@ async function refreshSources() {
     await loadNews();
     await loadHealth();
     const totals = result.totals || {};
-    toast(`Обновление завершено: новых ${totals.new || 0}, без изменений ${totals.unchanged || 0}`);
+    const failedSources = (result.sources || []).filter(source => ['error', 'partial'].includes(source.status));
+    toast(failedSources.length
+      ? `Лента обновлена: новых ${totals.new || 0}. Проверьте источники: ${failedSources.map(source => source.source_id).join(', ')}`
+      : `Обновление завершено: новых ${totals.new || 0}, без изменений ${totals.unchanged || 0}`);
   } catch (error) {
     toast(error.message);
   } finally {
     done();
   }
 }
-
 function openAddNews() {
   $('#add-news-error').textContent = '';
   $('#add-news-dialog').showModal();
@@ -451,25 +537,21 @@ async function submitNews(event) {
 
 function wireEvents() {
   $$('.nav-item').forEach(button => button.addEventListener('click', () => showView(button.dataset.view)));
-  $$('[data-go="news"]').forEach(button => button.addEventListener('click', () => showView('news')));
+  $$('[data-go="news"]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); showView('news'); }));
+  $$('[data-go="overview"]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); showView('overview'); }));
   $('#company-select').addEventListener('change', event => {
     state.companyId = event.target.value;
     $('#company-select-inline').value = state.companyId;
     if (state.companyId) loadCompany(state.companyId);
-    renderFeed(state.news, '#overview-feed', 6);
+    renderFeed(state.overviewNews, '#overview-feed', 6);
     if (state.selectedNews) selectNews(state.selectedNews.news_id);
   });
   $('#company-select-inline').addEventListener('change', event => {
     $('#company-select').value = event.target.value;
     $('#company-select').dispatchEvent(new Event('change'));
   });
-  $('#relevance-filter').addEventListener('change', () => loadNews());
   $('#full-relevance-filter').addEventListener('change', () => loadNews(true));
   let searchTimer;
-  $('#news-search').addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadNews(false), 280);
-  });
   $('#full-news-search').addEventListener('input', () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => loadNews(true), 280);
@@ -486,6 +568,7 @@ function wireEvents() {
 
 async function init() {
   $('#today').textContent = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date());
+  restoreAnalysisCache();
   wireEvents();
   await Promise.all([loadHealth(), loadNews()]);
   try {

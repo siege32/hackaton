@@ -196,6 +196,11 @@ class InsightEngine:
             stale = assessment is not None and (
                 assessment.content_version != processing.content_version
                 or assessment.profile_version != company.profile_version
+                or (
+                    assessment.classification_source == "llm"
+                    and assessment.prompt_version
+                    != PROMPT_VERSIONS["company_assessment"]
+                )
             )
             if stale or (assessment is None and auto_classify):
                 assessment = self._reassess(company, processing, news_text)
