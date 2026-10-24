@@ -71,6 +71,12 @@ API подключает репозитории `data_pipeline` к сущест�
 
 ## Проверка
 
+Чтобы установить зависимости тестового окружения, из корня проекта выполните:
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+Затем запустите
 ```powershell
 python -m unittest discover -s tests -t .
 ```
