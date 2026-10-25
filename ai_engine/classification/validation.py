@@ -190,7 +190,7 @@ def validate_assessment_payload(
                 warnings.append("confidence was outside [0, 1] and was clamped")
             confidence = clamped
             limitations.append(
-                "confidence is a preliminary model estimate, not a probability of financial loss"
+                "уверенность — предварительная оценка модели, а не вероятность финансовых потерь"
             )
 
     if warnings:

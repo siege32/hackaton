@@ -71,10 +71,10 @@ class RuleBasedClassifier:
                 processing,
                 relevance=RelevanceClass.DROP,
                 reason=(
-                    "Stage-A classification marked the news as not business-relevant: "
-                    f"{processing.classification_reason or 'no reason provided'}"
+                    "Новость не относится к деловой или экономической тематике: "
+                    f"{processing.classification_reason or 'причина не указана'}"
                 ),
-                limitations=["company-specific analysis was skipped because stage-A marked the news DROP"],
+                limitations=["Анализ для компании не проводился: новость отсеяна на этапе общей оценки"],
                 missing_data=context.gaps,
                 confidence=0.5,
             )
@@ -84,9 +84,9 @@ class RuleBasedClassifier:
                 profile,
                 processing,
                 relevance=RelevanceClass.REVIEW,
-                reason="No grounded facts were extracted, so company relevance cannot be established.",
-                limitations=["no extracted facts to support a company-specific conclusion"],
-                missing_data=context.gaps + ["grounded news facts"],
+                reason="Из новости не извлечено подтверждённых фактов, поэтому связь с компанией установить нельзя.",
+                limitations=["нет извлечённых фактов, на которые мог бы опереться вывод о компании"],
+                missing_data=context.gaps + ["подтверждённые факты из новости"],
                 confidence=0.2,
             )
 
@@ -96,10 +96,10 @@ class RuleBasedClassifier:
                 processing,
                 relevance=RelevanceClass.REVIEW,
                 reason=(
-                    "Company profile has no operational details (activities, products, costs, "
-                    "geography or counterparties); relevance cannot be judged confidently."
+                    "В профиле компании нет операционных данных (деятельность, продукты, затраты, "
+                    "география, контрагенты), поэтому уверенно оценить релевантность нельзя."
                 ),
-                limitations=["profile is too sparse for a confident company-specific decision"],
+                limitations=["профиль компании слишком скудный для уверенного вывода"],
                 missing_data=context.gaps,
                 confidence=0.2,
             )
@@ -125,15 +125,15 @@ class RuleBasedClassifier:
                     processing,
                     relevance=RelevanceClass.REVIEW,
                     reason=(
-                        "Only a weak link was found (industry match, geography or an unconfirmed "
-                        "counterparty relationship); this is not enough for KEEP."
+                        "Найдена только слабая связь (совпадение отрасли, географии или неподтверждённый "
+                        "контрагент); этого недостаточно, чтобы считать новость связанной с компанией."
                     ),
                     limitations=[
-                        "industry or geography coincidence alone does not prove a significant link",
-                        "counterparty dependency is not confirmed by available data",
+                        "совпадение отрасли или географии само по себе не доказывает существенную связь",
+                        "зависимость от контрагента не подтверждена имеющимися данными",
                     ],
                     missing_data=context.gaps
-                    + ["confirmed dependency or an operational exposure linked to the event"],
+                    + ["подтверждённая зависимость или операционная связь компании с событием"],
                     confidence=0.3,
                 )
             return self._result(
@@ -141,12 +141,12 @@ class RuleBasedClassifier:
                 processing,
                 relevance=RelevanceClass.DROP,
                 reason=(
-                    "No supported link was found between the event and the available profile "
-                    "fields (products, costs, resources, geography, risks or confirmed counterparties)."
+                    "Не найдено подтверждённой связи события с данными профиля "
+                    "(продукты, затраты, ресурсы, география, риски или подтверждённые контрагенты)."
                 ),
                 limitations=[
-                    "absence of a field in the profile is not proof that no dependency exists",
-                    "rule-based decision over available data only",
+                    "отсутствие поля в профиле не доказывает, что зависимости нет",
+                    "решение принято правилами только по имеющимся данным",
                 ],
                 missing_data=context.gaps,
                 confidence=0.5,
@@ -161,10 +161,10 @@ class RuleBasedClassifier:
                 processing,
                 relevance=RelevanceClass.REVIEW,
                 reason=(
-                    "An operational exposure matched, but the direction of the event effect "
-                    "cannot be established from the source wording."
+                    "Связь с деятельностью компании найдена, но направление влияния события "
+                    "по тексту источника установить нельзя."
                 ),
-                limitations=["event direction is not explicit in the text"],
+                limitations=["направление события в тексте явно не указано"],
                 missing_data=context.gaps,
                 confidence=0.3,
             )
@@ -173,14 +173,14 @@ class RuleBasedClassifier:
         direct = bool(profile.name) and normalize_text(profile.name) in normalize_text(text)
         impact_type = ImpactType.DIRECT if direct else ImpactType.INDIRECT
         limitations = [
-            "rule-based classification over available data; not verified by an LLM",
-            "confidence is a preliminary heuristic, not a calibrated probability",
+            "оценка сделана правилами по имеющимся данным, без проверки моделью",
+            "уверенность — предварительная эвристическая оценка, а не вероятность",
         ]
         unconfirmed = [e for e in context.exposures if e.relationship_id and not self._relationship_confirmed(e, relationships)]
         if unconfirmed:
-            limitations.append("counterparty dependency is not confirmed; it is treated as indirect context")
+            limitations.append("зависимость от контрагента не подтверждена и учитывается только как косвенный контекст")
         if any(e.field in {"profile_suppliers", "profile_customers"} for e in context.exposures):
-            limitations.append("counterparty entries from the profile were not independently confirmed")
+            limitations.append("контрагенты из профиля не подтверждены независимыми источниками")
 
         evidence = self._evidence(strong, processing)
         return self._result(
@@ -188,8 +188,8 @@ class RuleBasedClassifier:
             processing,
             relevance=RelevanceClass.KEEP,
             reason=(
-                f"The event matches explicit profile exposure(s): "
-                f"{'; '.join(e.evidence for e in strong[:3])}. Mechanism: {mechanism}"
+                f"Событие совпадает с явными факторами профиля компании: "
+                f"{'; '.join(e.evidence for e in strong[:3])}. Механизм: {mechanism}"
             ),
             direction=direction,
             impact_type=impact_type,
@@ -253,19 +253,19 @@ class RuleBasedClassifier:
         parts = []
         for exposure in strong[:3]:
             if exposure.kind in {"revenue", "demand"}:
-                effect = "revenue/demand exposure"
+                effect = "влияние на выручку и спрос"
             elif exposure.kind in {"cost", "finance"}:
-                effect = "cost exposure"
+                effect = "влияние на затраты"
             elif exposure.kind == "risk":
-                effect = "known risk exposure"
+                effect = "известный риск компании"
             else:
-                effect = "operational exposure"
+                effect = "влияние на деятельность"
             parts.append(
-                f"{effect} via {exposure.field} '{exposure.matched_value}' "
-                f"(matched: {exposure.matched_term})"
+                f"{effect} через «{exposure.matched_value}» "
+                f"(совпадение: {exposure.matched_term})"
             )
-        direction = {"up": "increase", "down": "decrease"}.get(event_direction, "change")
-        return f"Event ({processing.event_type or 'news'}, {direction}) may affect " + "; ".join(parts)
+        direction = {"up": "рост", "down": "снижение"}.get(event_direction, "изменение")
+        return f"Событие ({direction}) может повлиять на компанию: " + "; ".join(parts)
 
     @staticmethod
     def _evidence(strong, processing: NewsProcessingResult) -> list[EvidenceItem]:
@@ -283,7 +283,7 @@ class RuleBasedClassifier:
                 fact_id=fact.fact_id,
                 source_id=fact.source_id,
                 quote=fact.quote,
-                supports=f"source states: {fact.subject} {fact.action}",
+                supports=f"источник сообщает: {fact.subject} {fact.action}",
             )
             for fact in selected[:3]
         ]
@@ -404,7 +404,7 @@ class CompanyNewsClassifier:
                 profile,
                 processing,
                 context,
-                reason=f"Model output failed schema/grounding validation: {exc.message}",
+                reason=f"Ответ модели не прошёл проверку структуры и опоры на источник: {exc.message}",
                 model_id=response.model_id,
                 prompt_version=prompt_version,
             )
@@ -453,8 +453,8 @@ class CompanyNewsClassifier:
             supporting_fact_ids=[],
             evidence=[],
             limitations=[
-                "the LLM response was rejected by deterministic validation",
-                "no unsupported claim was stored; manual review is required",
+                "ответ модели отклонён автоматической проверкой",
+                "неподтверждённые утверждения не сохранены; нужна ручная проверка",
             ],
             missing_data=context.gaps,
             content_version=processing.content_version,

@@ -85,8 +85,8 @@ class ContextualClassificationTests(unittest.TestCase):
         assessment = service.classify_news_for_company(relation_news.news_id, "company-it")
         self.assertEqual(assessment.relevance_class, RelevanceClass.REVIEW)
         self.assertNotEqual(assessment.impact_type, ImpactType.DIRECT)
-        self.assertTrue(any("not confirmed" in limitation for limitation in assessment.limitations))
-        self.assertTrue(any("counterparty" in gap.lower() or "dependency" in gap.lower() for gap in assessment.missing_data))
+        self.assertTrue(any("не подтвержден" in limitation for limitation in assessment.limitations))
+        self.assertTrue(any("контрагент" in gap.lower() or "зависимост" in gap.lower() for gap in assessment.missing_data))
 
     def test_payment_link_is_not_treated_as_dependency(self):
         relation_news = NewsRecord(
@@ -161,7 +161,7 @@ class LLMClassificationValidationTests(unittest.TestCase):
         assessment = service.classify_news_for_company(GAS_NEWS.news_id, "company-cement")
         self.assertEqual(assessment.relevance_class, RelevanceClass.REVIEW)
         self.assertEqual(assessment.classification_source, "llm_rejected")
-        self.assertTrue(any("validation" in item for item in assessment.limitations))
+        self.assertTrue(any("проверк" in item for item in assessment.limitations))
 
     def test_keep_with_fabricated_fact_reference_is_downgraded(self):
         service, *_ = self._service()
