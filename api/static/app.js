@@ -28,6 +28,60 @@ const labels = {
 };
 
 const ocrLabels = { high: 'высокая', medium: 'средняя', low: 'низкая' };
+const evidenceLabels = {
+  fact: 'факт из новости', relationship: 'данные о компании', calculation: 'расчёт по платежам',
+  user_statement: 'заявление пользователя', external_search: 'внешний источник',
+  inference: 'вывод модели', hypothesis: 'гипотеза модели',
+};
+
+// ai_engine режет цитату на фиксированной длине — дорезаем до конца последнего слова.
+function wordTrim(text, max = 300) {
+  if (text.length < max) return text;
+  const cut = text.slice(0, max).replace(/\s+\S*$/, '');
+  return `${cut || text.slice(0, max)}…`;
+}
+
+// Страховка: модель иногда переносит в текст служебные поля и ID из входных данных
+// («confirmed=false», «group_134402_sb»). Промпт ai_engine это запрещает, но при показе
+// известные шаблоны всё равно заменяем на русские слова.
+const technicalTerms = [
+  [/\bconfirmed\s*=\s*false\b/gi, 'статус «не подтверждено»'],
+  [/\bconfirmed\s*=\s*true\b/gi, 'статус «подтверждено»'],
+  [/\bGROUP_ID\s+/g, ''],
+  [/\bimpact_direction\s*=\s*unknown\b/gi, 'направление не определено'],
+  [/\b(?:relevance_class|impact_direction|impact_horizon|impact_type)\s*=\s*\w+/gi, ''],
+  [/\buser_statement\b/gi, 'заявление пользователя'],
+  [/\bunknowns\b/gi, 'неизвестные'],
+  [/\bconfidence\b/gi, 'уверенность'],
+  [/(групп[а-яё]*)\s+group_\d+(?:_sb)?\b/gi, '$1'],  // «её группы group_…» -> «её группы»
+  [/\bgroup_\d+(?:_sb)?\b/gi, 'группа компаний'],
+  [/\b(?:news|analysis)_[0-9a-f]{8,}\b:?\s*/gi, ''],
+  [/\bdf_\w+?_hack\.csv\b/gi, 'данные банка'],
+  [/\b(?:prod_(?:loa|lea|gar|rko|dep|zpp)|FACTORING_MARK|CL_PRODUCT_\w+)\s*=\s*\d\b/gi, ''],
+];
+const technicalSkip = new Set(['analysis_id', 'news_id', 'company_id', 'ref_id', 'id', 'kind', 'type', 'url', 'status',
+  'relevance_class', 'impact_direction', 'impact_horizon', 'impact_type', 'source_id', 'snippet_id']);
+
+function humanText(text) {
+  let out = text;
+  for (const [pattern, replacement] of technicalTerms) out = out.replace(pattern, replacement);
+  return out.replace(/\(\s*\)/g, '').replace(/\s{2,}/g, ' ').replace(/\s+([,.;:)])/g, '$1')
+    .replace(/[,;]\s*([,.;)])/g, '$1').replace(/[,;:]\s*$/, '').trim();
+}
+
+// Под основанием показываем источник, только если это название («Альфа-Банк, «…»», «РБК»), а не ID.
+function readableSource(value) {
+  return value && /[а-яё]/i.test(value) && !/^(?:news|fact|analysis)_/i.test(value) ? value : '';
+}
+
+function humanizeResult(value, key = '') {
+  if (typeof value === 'string') return technicalSkip.has(key) ? value : humanText(value);
+  if (Array.isArray(value)) return value.map(item => humanizeResult(item, key));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, humanizeResult(v, k)]));
+  }
+  return value;
+}
 
 function label(value) {
   return labels[value] || value || 'Не указано';
@@ -362,7 +416,8 @@ function renderJobError(message) {
   $('#retry-analysis').addEventListener('click', runAnalysis);
 }
 
-function renderAnalysis(result, status) {
+function renderAnalysis(rawResult, status) {
+  const result = humanizeResult(rawResult);
   if (state.currentView !== 'news') $('#analysis-empty').classList.add('hidden');
   const content = state.currentView === 'news' ? $('#news-detail') : $('#analysis-content');
   $('#overview-analysis')?.classList.add('has-content');
@@ -372,6 +427,14 @@ function renderAnalysis(result, status) {
   const first = events[0] || {};
   const rationale = result.summary || first.mechanism || 'Анализ сохранён без краткого резюме.';
   const evidence = events.flatMap(event => event.evidence || []);
+  // ТЗ: позицию Альфа-Банка показываем отдельно от выводов модели. Фрагменты отчётов
+  // банка приходят из ai_engine с kind === 'analytics'; один фрагмент может быть
+  // привязан к нескольким событиям — показываем его один раз.
+  const bankEvidence = evidence
+    .filter(item => item.kind === 'analytics')
+    .filter((item, index, all) => all.findIndex(other => other.ref_id === item.ref_id) === index);
+  const reasonEvidence = evidence.filter(item => item.kind !== 'analytics');
+  const isDropOnly = events.length > 0 && events.every(event => event.relevance_class === 'DROP');
   const externalSources = (result.sources_used || [])
     .filter(source => source.type === 'external_search')
     .map(source => ({ title: source.title || source.id, url: source.id }));
@@ -385,12 +448,14 @@ function renderAnalysis(result, status) {
     ${events.map(event => `<section class="result-section"><h3>${escapeHtml(label(event.relevance_class))} · ${escapeHtml(label(event.impact_type))}</h3><div class="claim"><p>${escapeHtml(event.mechanism || 'Механизм влияния не подтверждён.')}</p>${(event.potential_consequences || []).map(item => `<p>${escapeHtml(item)}</p>`).join('')}${event.confidence !== null && event.confidence !== undefined ? `<small>Уверенность модели: ${Math.round(event.confidence * 100)}%</small>` : ''}</div></section>`).join('')}
     ${result.key_risks?.length ? `<section class="result-section"><h3>Риски</h3>${result.key_risks.map(item => `<div class="claim"><p>${escapeHtml(item)}</p></div>`).join('')}</section>` : ''}
     ${result.potential_opportunities?.length ? `<section class="result-section"><h3>Возможности</h3>${result.potential_opportunities.map(item => `<div class="claim"><p>${escapeHtml(item)}</p></div>`).join('')}</section>` : ''}
-    ${evidence.length ? `<section class="result-section"><h3>Основания · ${evidence.length}</h3>${evidence.map(item => `<div class="claim"><p>${escapeHtml(item.quote || item.supports || 'Аналитическое основание')}</p><small>${escapeHtml(item.source_id || item.ref_id || item.kind || '')}${item.confirmed === false ? ' · не подтверждено внешним источником' : ''}</small></div>`).join('')}</section>` : ''}
-    ${sourceRows.length || (result.sources_used || []).some(source => source.type === 'bank_service_analytics') ? `<section class="result-section"><h3>Источники</h3>${sourceRows.map(source => {
+    ${bankEvidence.length ? `<section class="result-section bank-position"><h3>Позиция Альфа-Банка · ${bankEvidence.length}</h3><p class="bank-position-note">Цитаты из аналитических отчётов банка. Это позиция банка, а не вывод модели.</p>${bankEvidence.map(item => `<div class="claim"><p>${escapeHtml(wordTrim(item.quote || item.supports || ''))}</p><small>${escapeHtml(item.source_id || item.ref_id || 'Аналитика Альфа-Банка')}</small></div>`).join('')}</section>`
+      : events.length && !isDropOnly ? `<section class="result-section bank-position"><h3>Позиция Альфа-Банка</h3><p class="bank-position-note">В аналитике банка материалов по теме не найдено. Вывод сделан без позиции банка.</p></section>` : ''}
+    ${reasonEvidence.length ? `<section class="result-section"><h3>Основания вывода · ${reasonEvidence.length}</h3>${reasonEvidence.map(item => `<div class="claim"><p>${escapeHtml(item.quote || item.supports || 'Аналитическое основание')}</p><small>${escapeHtml([evidenceLabels[item.kind], readableSource(item.source_id)].filter(Boolean).join(' · '))}${item.confirmed === false ? ' · не подтверждено внешним источником' : ''}</small></div>`).join('')}</section>` : ''}
+    ${sourceRows.length ? `<section class="result-section"><h3>Источники новости</h3>${sourceRows.map(source => {
       let safeUrl = false;
       try { safeUrl = ['http:', 'https:'].includes(new URL(source.url).protocol); } catch {}
       return safeUrl ? `<div class="source-row"><span>${escapeHtml(source.source_name || source.title || source.source || 'Источник')}</span><a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Открыть ↗</a></div>` : '';
-    }).join('')}${(result.sources_used || []).filter(source => source.type === 'bank_service_analytics').map(source => `<div class="source-row"><span>${escapeHtml(source.source || source.title || 'Аналитика банка')}</span><span>${escapeHtml(source.title || '')}</span></div>`).join('')}</section>` : ''}
+    }).join('')}</section>` : ''}
     ${[...(result.limitations || []), ...(result.missing_data || []), ...(first.limitations || [])].map(item => `<div class="limitation">${escapeHtml(item)}</div>`).join('')}
     ${result.recommended_checks?.length ? `<section class="result-section"><h3>Что проверить</h3>${result.recommended_checks.map(item => `<div class="claim"><p>${escapeHtml(item)}</p></div>`).join('')}</section>` : ''}
     <div class="news-actions"><button class="button button-secondary" id="show-refinement">Добавить уточнение</button></div>
