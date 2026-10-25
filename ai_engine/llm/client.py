@@ -155,8 +155,11 @@ class LLMClient:
             except LLMInvalidResponseError as exc:
                 last_error = exc
                 self._log_attempt(
-                    prompt_version, attempt, attempts_total, started, error="invalid_json"
+                    prompt_version, attempt, attempts_total, started,
+                    error=str(exc.details.get("finish_reason") or "invalid_json")
                 )
+                if exc.details.get("finish_reason") == "length":
+                    raise
                 if attempt < attempts_total:
                     self._sleep(self._backoff(attempt))
                 continue
@@ -183,7 +186,14 @@ class LLMClient:
         choices = getattr(response, "choices", None)
         if not choices:
             raise LLMInvalidResponseError("LLM response has no choices")
-        message = getattr(choices[0], "message", None)
+        choice = choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason == "length":
+            raise LLMInvalidResponseError(
+                "LLM response was truncated because the output token limit was reached",
+                details={"finish_reason": "length"},
+            )
+        message = getattr(choice, "message", None)
         raw = getattr(message, "content", None)
         if isinstance(raw, list):
             text_parts = []

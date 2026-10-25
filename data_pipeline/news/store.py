@@ -26,7 +26,7 @@ from ai_engine.utils import content_version as engine_content_version
 
 from . import dedup
 from .clean import CleanArticle, content_hash, normalize_url
-from .prefilter import DROP, PrefilterResult
+from .prefilter import DROP, NO_TEXT_REASON, PrefilterResult
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS news (
@@ -91,7 +91,18 @@ def open_news_db(path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
+    _drop_textless(conn)
     return conn
+
+
+def _drop_textless(conn: sqlite3.Connection) -> None:
+    """Снять с анализа записи без текста, сохранённые до правила NO_TEXT_REASON."""
+    with conn:
+        conn.execute(
+            "UPDATE news SET prefilter = ?, prefilter_reasons = ?, should_process = 0 "
+            "WHERE trim(coalesce(text, '')) = '' AND prefilter != ?",
+            (DROP, json.dumps([NO_TEXT_REASON], ensure_ascii=False), DROP),
+        )
 
 
 def make_news_id(url_norm: str | None, text_hash: str) -> str:

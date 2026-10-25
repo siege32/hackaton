@@ -3,14 +3,14 @@
 Этот документ описывает текущий код в репозитории. `data_pipeline` владеет
 каталогами и адаптерами данных, `ai_engine` выполняет извлечение и анализ,
 `api` соединяет их и обслуживает веб-интерфейс. Бизнес-логика данных и модели
-остается внутри соответствующих модулей.
+остаются внутри соответствующих модулей.
 
 ## Поток запроса
 
 ```text
 Web UI -> FastAPI -> data_pipeline repositories -> ai_engine service -> SQLite intel store
-                        |                                  |
-                        +-- company/news/report reads -----+
+                         |                                  |
+                         +-- company/news/report reads -----+
 ```
 
 `api.main._service_context()` открывает базу компаний в read-only режиме,
@@ -22,11 +22,11 @@ Web UI -> FastAPI -> data_pipeline repositories -> ai_engine service -> SQLite i
 - `data_pipeline.PaymentRelationshipRepository` — `RelationshipRepository`;
 - `data_pipeline.PaymentCalculationRepository` — `CalculationRepository`;
 - `data_pipeline.reports.BankReportsIndex` — `AnalyticsIndex`;
-- `ai_engine.storage.sql.SqlStore` — собственное хранилище результатов и фактов AI.
+- `ai_engine.storage.sql.SqlStore` — хранилище результатов и фактов AI.
 
 База компаний не изменяется API. Каталог новостей создается идемпотентно
-модулем данных. Задачи HTTP API и данные AI хранятся в SQLite; API не создает
-вторую Redis-очередь и не запускает worker поверх очереди модуля.
+модулем данных. Job статусы HTTP API и данные AI хранятся в SQLite; API не
+создает отдельную Redis-очередь.
 
 ## Данные на границе модулей
 
@@ -55,8 +55,8 @@ Web UI -> FastAPI -> data_pipeline repositories -> ai_engine service -> SQLite i
 
 ## Сценарии API
 
-Основные маршруты описаны в [api/README.md](../api/README.md) и схеме
-`/docs`. Главный сценарий анализа:
+Основные маршруты описаны в [api/README.md](../api/README.md) и схеме `/docs`.
+Главный сценарий анализа:
 
 1. UI выбирает `company_id` и `news_id` из API-каталогов.
 2. `POST /api/v1/analysis` проверяет, что компания и все новости существуют,
@@ -79,11 +79,11 @@ Web UI -> FastAPI -> data_pipeline repositories -> ai_engine service -> SQLite i
 
 Настройки читаются `ai_engine.config.Settings.from_env()`. LLM-таймаут и лимит
 ответа по умолчанию — 180 секунд и 8000 токенов; переменные окружения имеют
-приоритет над кодовыми значениями. При таймауте LLM-запрос не повторяется.
-Скопированный ранее `.env` может содержать старые значения `LLM_TIMEOUT` и
-`LLM_MAX_TOKENS`; обновите их до значений из `.env.example`, если они там заданы.
+приоритет над кодовыми значениями. Таймаут не повторяется; `LLM_MAX_RETRIES`
+ограничивает повторы других временных ошибок. Скопированный ранее `.env` может
+содержать старые значения — сверяйте его с `.env.example`.
 
-Запуск, сборка базы и сценарии проверки приведены в корневом
-[README.md](../README.md). Для production следует перенести фоновые задачи из
-процесса FastAPI в устойчивую очередь и использовать подходящую БД; текущая
-реализация рассчитана на локальную демонстрацию.
+Команды сборки и локального запуска приведены в [README.md](../README.md).
+Для production следует перенести фоновые задачи из процесса FastAPI в
+устойчивую очередь и использовать подходящую БД; текущая реализация рассчитана
+на локальную демонстрацию.

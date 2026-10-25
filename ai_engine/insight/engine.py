@@ -23,7 +23,7 @@ from ..errors import (
     ToolUnavailableError,
 )
 from ..llm.client import LLMClient
-from ..llm.prompts import PROMPT_VERSIONS, insight_prompts
+from ..llm.prompts import PROMPT_VERSIONS, adaptation_prompts, insight_prompts
 from ..llm.schemas import InsightResponse
 from ..models import (
     AnalysisStatus,
@@ -68,6 +68,45 @@ def _dedupe_strings(items: Iterable[str]) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+_DEFAULT_NOT_RELEVANT_REASON = "связь события с профилем компании не подтверждена"
+_NOT_RELEVANT_TITLE = "Новость не относится к компании"
+
+
+def _assessment_reason(assessment: CompanyNewsAssessment) -> str:
+    """Return the most specific explanation produced by the classifier."""
+    for candidate in (
+        assessment.reasoning_summary,
+        assessment.impact_mechanism,
+        assessment.limitations[0] if assessment.limitations else "",
+    ):
+        text = (candidate or "").strip()
+        if text:
+            return text
+    return _DEFAULT_NOT_RELEVANT_REASON
+
+
+def _not_relevant_summary(reasons: list[tuple[str, str]]) -> str:
+    """Build a Russian user-facing explanation for filtered news.
+
+    ``reasons`` contains ``(news_id, reason)`` pairs. A single news item gets
+    a short sentence; several items are listed with their ids so the user can
+    tell which event each reason belongs to.
+    """
+    cleaned = [
+        (news_id, (reason or "").strip() or _DEFAULT_NOT_RELEVANT_REASON)
+        for news_id, reason in reasons
+    ]
+    if not cleaned:
+        return f"{_NOT_RELEVANT_TITLE}. Причина: {_DEFAULT_NOT_RELEVANT_REASON}."
+    if len(cleaned) == 1:
+        reason = cleaned[0][1]
+        if not reason.endswith((".", "!", "?")):
+            reason += "."
+        return f"{_NOT_RELEVANT_TITLE}. Причина: {reason}"
+    details = "; ".join(f"{news_id}: {reason}" for news_id, reason in cleaned)
+    return f"Новости не относятся к компании. Причины: {details}"
 
 
 def _profile_gaps(profile: CompanyProfile) -> list[str]:
@@ -131,7 +170,7 @@ class InsightEngine:
         event_ids: Sequence[str],
         *,
         include_review: bool = True,
-        include_drop: bool = False,
+        include_drop: bool | None = None,
         auto_classify: bool = False,
         save: bool = True,
     ) -> InsightResult:
@@ -151,10 +190,10 @@ class InsightEngine:
             relationship_error = ""
         except ToolUnavailableError:
             relationships = []
-            relationship_error = "counterparty relationship store is unavailable"
+            relationship_error = "Хранилище связей с контрагентами недоступно"
         except Exception as exc:  # defensive: a tool must not kill the analysis
             relationships = []
-            relationship_error = f"counterparty relationship store failed: {type(exc).__name__}"
+            relationship_error = f"Ошибка хранилища связей с контрагентами: {type(exc).__name__}"
 
         budget = SearchBudget(min(self.settings.max_additional_searches, SearchBudget.MAX_ALLOWED))
         tools = InsightTools(
@@ -172,23 +211,24 @@ class InsightEngine:
         unknowns: list[str] = []
         if relationship_error:
             limitations.append(relationship_error)
-            missing_data.append("counterparty relationships")
+            missing_data.append("связи с контрагентами")
 
         items: list[tuple[NewsProcessingResult, CompanyNewsAssessment, str]] = []
         unavailable_events: list[str] = []
         filtered_events: list[str] = []
+        dropped_items: list[tuple[NewsProcessingResult, CompanyNewsAssessment, str]] = []
         stale_or_missing: list[str] = []
 
         for news_id in requested:
             processing = self.store.get_processing_result(news_id)
             if processing is None:
                 unavailable_events.append(news_id)
-                stale_or_missing.append(f"{news_id}: no processing result")
+                stale_or_missing.append(f"{news_id}: результат обработки отсутствует")
                 continue
             if processing.status != ProcessingStatus.PROCESSED:
                 unavailable_events.append(news_id)
                 stale_or_missing.append(
-                    f"{news_id}: processing status is {processing.status.value}"
+                    f"{news_id}: статус обработки — {processing.status.value}"
                 )
                 continue
             news_text = self._news_text(news_id, processing)
@@ -196,19 +236,27 @@ class InsightEngine:
             stale = assessment is not None and (
                 assessment.content_version != processing.content_version
                 or assessment.profile_version != company.profile_version
+                or (
+                    assessment.classification_source == "llm"
+                    and assessment.prompt_version
+                    != PROMPT_VERSIONS["company_assessment"]
+                )
             )
             if stale or (assessment is None and auto_classify):
                 assessment = self._reassess(company, processing, news_text)
             if assessment is None:
                 unavailable_events.append(news_id)
-                stale_or_missing.append(f"{news_id}: no company assessment")
+                stale_or_missing.append(f"{news_id}: оценка для компании отсутствует")
                 continue
             if stale and assessment.content_version != processing.content_version:
                 unavailable_events.append(news_id)
-                stale_or_missing.append(f"{news_id}: stale assessment")
+                stale_or_missing.append(f"{news_id}: оценка устарела")
                 continue
-            if assessment.relevance_class == RelevanceClass.DROP and not include_drop:
+            if assessment.relevance_class == RelevanceClass.DROP and include_drop is not True:
+                # Keep the assessment so a DROP-only analysis can still
+                # explain itself to the UI instead of returning empty metrics.
                 filtered_events.append(news_id)
+                dropped_items.append((processing, assessment, news_text))
                 continue
             if assessment.relevance_class == RelevanceClass.REVIEW and not include_review:
                 filtered_events.append(news_id)
@@ -230,9 +278,9 @@ class InsightEngine:
         try:
             calculations = tools.get_calculations(company_id)
         except ToolUnavailableError:
-            missing_data.append("prepared calculations")
+            missing_data.append("подготовленные расчёты")
         except Exception as exc:
-            limitations.append(f"calculation tool failed: {type(exc).__name__}")
+            limitations.append(f"Ошибка инструмента расчётов: {type(exc).__name__}")
 
         for calculation in calculations:
             ref = str(
@@ -259,27 +307,17 @@ class InsightEngine:
 
         for index, event in enumerate(events):
             processing, assessment, _ = items[index]
-            sources.append(
-                {
-                    "type": "news",
-                    "id": processing.news_id,
-                    "source_id": processing.source_id,
-                    "version": processing.content_version,
-                }
-            )
-            for evidence in assessment.evidence:
-                sources.append(
-                    {"type": "fact", "id": evidence.fact_id, "news_id": processing.news_id}
-                )
-            for link in event.evidence:
-                if link.kind == "relationship":
-                    sources.append(
-                        {
-                            "type": "relationship",
-                            "id": link.ref_id,
-                            "confirmed": link.confirmed,
-                        }
-                    )
+            self._append_event_sources(sources, processing, assessment, event)
+
+        # A DROP-only analysis must still carry enough information for the UI:
+        # relevance, direction and horizon are read from the first event.
+        drop_explanations: list[tuple[str, str]] = []
+        if not events and dropped_items and include_drop is None:
+            for processing, assessment, news_text in dropped_items:
+                event = self._build_event(assessment, processing, relationships, news_text)
+                events.append(event)
+                self._append_event_sources(sources, processing, assessment, event)
+                drop_explanations.append((processing.news_id, _assessment_reason(assessment)))
 
         # --- optional LLM synthesis --------------------------------------
         llm_failed = False
@@ -303,16 +341,28 @@ class InsightEngine:
                 )
             except (LLMError, SchemaValidationError) as exc:
                 llm_failed = True
-                limitations.append(f"LLM synthesis rejected or failed: {exc.message}")
+                limitations.append(f"Не удалось подготовить синтез аналитики: {exc.message}")
                 self._logger.warning(
                     "insight LLM synthesis failed company_id=%s error=%s", company_id, exc.message
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 llm_failed = True
-                limitations.append(f"LLM synthesis failed: {type(exc).__name__}")
+                limitations.append(f"Ошибка синтеза аналитики: {type(exc).__name__}")
                 self._logger.warning("insight LLM synthesis crashed company_id=%s", company_id)
 
-        if synthesis is not None:
+        if not drop_explanations and events and all(
+            event.relevance_class == RelevanceClass.DROP for event in events
+        ):
+            drop_explanations = [
+                (event.news_id, event.mechanism or _DEFAULT_NOT_RELEVANT_REASON)
+                for event in events
+            ]
+
+        if drop_explanations:
+            summary = _not_relevant_summary(drop_explanations)
+            key_risks, opportunities = self._derive_risks_and_opportunities(events)
+            recommended = self._default_checks(events, company, relationships)
+        elif synthesis is not None:
             events = synthesis.events
             summary = synthesis.summary or self._default_summary(company, events)
             key_risks = synthesis.key_risks
@@ -327,10 +377,13 @@ class InsightEngine:
             recommended = self._default_checks(events, company, relationships)
 
         # --- status -------------------------------------------------------
-        analytics_unavailable = analytics_unavailable or self.analytics is None
-        if self.analytics is None:
+        drop_only = bool(events) and all(
+            event.relevance_class == RelevanceClass.DROP for event in events
+        )
+        analytics_unavailable = analytics_unavailable or (self.analytics is None and not drop_only)
+        if self.analytics is None and not drop_only:
             limitations.append(
-                "banking analytics index is not configured; no banking analytics was used"
+                "Индекс банковской аналитики не настроен; банковская аналитика не использовалась"
             )
             if "banking analytics search" not in missing_data:
                 missing_data.append("banking analytics search")
@@ -340,7 +393,7 @@ class InsightEngine:
                 status = AnalysisStatus.FAILED
             else:
                 status = AnalysisStatus.COMPLETED
-                unknowns.append("none of the requested events passed the relevance filter")
+                unknowns.append("ни одна из запрошенных новостей не прошла фильтр релевантности")
         elif unavailable_events or analytics_unavailable or llm_failed:
             status = AnalysisStatus.PARTIAL
         else:
@@ -355,8 +408,8 @@ class InsightEngine:
             + [f"{e.news_id}: {lim}" for e in events for lim in e.limitations]
         )
         limitations = _dedupe_strings(limitations)
-        if filtered_events:
-            summary += f" {len(filtered_events)} event(s) were skipped by the relevance filter."
+        if filtered_events and not drop_explanations:
+            summary += f" Отфильтровано по релевантности событий: {len(filtered_events)}."
 
         analysis_id = stable_id(
             "analysis",
@@ -397,6 +450,35 @@ class InsightEngine:
         return result
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _append_event_sources(
+        sources: list[dict[str, Any]],
+        processing: NewsProcessingResult,
+        assessment: CompanyNewsAssessment,
+        event: ImpactEvent,
+    ) -> None:
+        sources.append(
+            {
+                "type": "news",
+                "id": processing.news_id,
+                "source_id": processing.source_id,
+                "version": processing.content_version,
+            }
+        )
+        for evidence in assessment.evidence:
+            sources.append(
+                {"type": "fact", "id": evidence.fact_id, "news_id": processing.news_id}
+            )
+        for link in event.evidence:
+            if link.kind == "relationship":
+                sources.append(
+                    {
+                        "type": "relationship",
+                        "id": link.ref_id,
+                        "confirmed": link.confirmed,
+                    }
+                )
+
     def _news_text(self, news_id: str, processing: NewsProcessingResult) -> str:
         if self.news is not None:
             try:
@@ -450,7 +532,7 @@ class InsightEngine:
                 break
             except Exception as exc:
                 analytics_unavailable = True
-                limitations.append(f"banking analytics search failed: {type(exc).__name__}")
+                limitations.append(f"Ошибка поиска в банковской аналитике: {type(exc).__name__}")
                 break
             covered += 1
             for snippet in result.analytics:
@@ -481,7 +563,7 @@ class InsightEngine:
                 except (ToolUnavailableError, SearchLimitExceeded):
                     external = ToolSearchResult()
                 except Exception as exc:
-                    limitations.append(f"external search failed: {type(exc).__name__}")
+                    limitations.append(f"Внешний поиск завершился ошибкой: {type(exc).__name__}")
                     external = ToolSearchResult()
                 for item in external.external[:3]:
                     ref = str(item.get("url") or item.get("id") or item.get("title") or "")
@@ -506,14 +588,14 @@ class InsightEngine:
                         )
                     )
                     event.hypothesis = True
-                    event.limitations.append("external search result is not verified against a primary source")
+                    event.limitations.append("Результат внешнего поиска не проверен по первоисточнику")
             if not result.analytics and not external_results:
-                unknowns.append(f"no banking analytics found for query: {query}")
+                unknowns.append(f"В банковской аналитике не найдено данных по запросу: {query}")
 
         if budget.used >= budget.limit and covered < len(items):
             limitations.append(
-                f"additional search budget ({budget.limit}) was exhausted; "
-                f"{len(items) - covered} event(s) were analyzed without new searches"
+                f"Лимит дополнительных поисковых запросов ({budget.limit}) исчерпан; "
+                f"событий без нового поиска: {len(items) - covered}"
             )
         return analytics_unavailable, external_results
 
@@ -547,7 +629,7 @@ class InsightEngine:
                     ref_id=fact.fact_id,
                     quote=item.quote or fact.quote,
                     source_id=item.source_id or fact.source_id,
-                    supports=item.supports or "supports the company-specific conclusion",
+                    supports=item.supports or "подтверждает вывод о компании",
                     confirmed=True,
                 )
             )
@@ -561,7 +643,7 @@ class InsightEngine:
                             ref_id=fact.fact_id,
                             quote=fact.quote,
                             source_id=fact.source_id,
-                            supports="cited supporting fact",
+                            supports="указанный подтверждающий факт",
                             confirmed=True,
                         )
                     )
@@ -576,8 +658,8 @@ class InsightEngine:
                 continue
             if rel.relation_type == RelationType.PAYMENT_LINK:
                 limitations.append(
-                    f"counterparty {rel.counterparty_name}: a payment link/single payment "
-                    "is not evidence of a dependency"
+                    f"Контрагент {rel.counterparty_name}: ссылка на оплату или единичный платёж "
+                    "не подтверждают зависимость"
                 )
                 continue
             strength = rel.dependency_evidence()
@@ -590,9 +672,9 @@ class InsightEngine:
                     quote=rel.evidence[0] if rel.evidence else rel.counterparty_name,
                     source_id=rel.source,
                     supports=(
-                        "confirmed counterparty dependency"
+                        "подтверждённая зависимость от контрагента"
                         if strength == "confirmed"
-                        else "reported counterparty connection; dependency not confirmed"
+                        else "связь с контрагентом заявлена, зависимость не подтверждена"
                     ),
                     confirmed=strength == "confirmed",
                 )
@@ -600,17 +682,24 @@ class InsightEngine:
             if strength != "confirmed":
                 hypothesis = True
                 limitations.append(
-                    f"counterparty dependency on {rel.counterparty_name} is not confirmed "
-                    f"(relation={rel.relation_type.value}, significance={rel.significance.value})"
+                    f"Зависимость от контрагента {rel.counterparty_name} не подтверждена "
+                    f"(тип связи: {rel.relation_type.value}, значимость: {rel.significance.value})"
                 )
 
         direction = assessment.impact_direction
-        consequences = self._consequences(direction, assessment.impact_mechanism)
-        chain = self._chain(processing, assessment)
+        if assessment.relevance_class == RelevanceClass.DROP:
+            mechanism = _assessment_reason(assessment)
+            consequences: list[str] = []
+            chain: list[str] = []
+            hypothesis = False
+        else:
+            mechanism = assessment.impact_mechanism
+            consequences = self._consequences(direction, assessment.impact_mechanism)
+            chain = self._chain(processing, assessment)
+            if direction == ImpactDirection.UNKNOWN:
+                hypothesis = True
         if assessment.relevance_class == RelevanceClass.KEEP and not evidence:
-            limitations.append("KEEP conclusion has no usable evidence after validation")
-            hypothesis = True
-        if direction == ImpactDirection.UNKNOWN:
+            limitations.append("Для категории KEEP после проверки не осталось подтверждающих данных")
             hypothesis = True
         if any(e.kind in {"inference", "hypothesis"} for e in evidence):
             hypothesis = True
@@ -620,7 +709,7 @@ class InsightEngine:
             relevance_class=assessment.relevance_class,
             impact_direction=direction,
             impact_type=assessment.impact_type,
-            mechanism=assessment.impact_mechanism,
+            mechanism=mechanism,
             potential_consequences=consequences,
             evidence=evidence,
             limitations=_dedupe_strings(limitations),
@@ -638,27 +727,27 @@ class InsightEngine:
             fact = processing.facts[0]
             event_text = f"{fact.subject} {fact.action}"
         else:
-            event_text = "event details unavailable"
+            event_text = "описание события недоступно"
         return [
-            f"Event (source): {event_text}",
-            f"Company link: {assessment.impact_mechanism or 'not established from available data'}",
-            f"Mechanism and direction: {assessment.impact_type.value} / {assessment.impact_direction.value}",
-            "Potential consequence: see potential_consequences (not a realized loss)",
+            f"Событие по источнику: {event_text}",
+            f"Связь с компанией: {assessment.impact_mechanism or 'не установлена по имеющимся данным'}",
+            f"Механизм и направление: {assessment.impact_type.value} / {assessment.impact_direction.value}",
+            "Возможное последствие: см. potential_consequences (это не фактический убыток)",
         ]
 
     @staticmethod
     def _consequences(direction: ImpactDirection, mechanism: str) -> list[str]:
-        mechanism_text = mechanism or "the identified exposure"
+        mechanism_text = mechanism or "выявленный фактор воздействия"
         if direction == ImpactDirection.POSITIVE:
-            return [f"Potential positive effect through {mechanism_text}; effect size is not calculated."]
+            return [f"Возможен положительный эффект через фактор «{mechanism_text}»; размер эффекта не рассчитан."]
         if direction == ImpactDirection.NEGATIVE:
-            return [f"Potential negative effect through {mechanism_text}; effect size is not calculated."]
+            return [f"Возможен отрицательный эффект через фактор «{mechanism_text}»; размер эффекта не рассчитан."]
         if direction == ImpactDirection.MIXED:
             return [
-                f"Potential positive and negative effects through {mechanism_text}; "
-                "their balance is not established."
+                f"Возможны положительный и отрицательный эффекты через фактор «{mechanism_text}»; "
+                "их соотношение не установлено."
             ]
-        return ["Direction of the potential effect cannot be established from available data."]
+        return ["Направление возможного эффекта нельзя установить по имеющимся данным."]
 
     def _llm_synthesis(
         self,
@@ -708,13 +797,17 @@ class InsightEngine:
     @staticmethod
     def _default_summary(company: CompanyProfile, events: list[ImpactEvent]) -> str:
         if not events:
-            return f"No relevant events were available for {company.name}."
+            return f"Нет доступных событий для компании {company.name}."
         keep = sum(1 for e in events if e.relevance_class == RelevanceClass.KEEP)
-        review = len(events) - keep
+        review = sum(1 for e in events if e.relevance_class == RelevanceClass.REVIEW)
+        drop = sum(1 for e in events if e.relevance_class == RelevanceClass.DROP)
+        counts = [f"связано: {keep}", f"требует проверки: {review}"]
+        if drop:
+            counts.append(f"не связано: {drop}")
         return (
-            f"Analyzed {len(events)} event(s) for {company.name}: "
-            f"KEEP={keep}, REVIEW={review}. Conclusions are potential effects, "
-            "not realized losses; see evidence and limitations per event."
+            f"Проанализировано событий для {company.name}: {len(events)} "
+            f"({', '.join(counts)}). Выводы — потенциальные эффекты, а не реализованные "
+            "убытки; основания и ограничения указаны для каждого события."
         )
 
     @staticmethod
@@ -722,11 +815,11 @@ class InsightEngine:
         risks = []
         opportunities = []
         for event in events:
-            label = event.mechanism or "impact mechanism not established"
+            label = event.mechanism or "механизм воздействия не установлен"
             if event.impact_direction in {ImpactDirection.NEGATIVE, ImpactDirection.MIXED}:
-                risks.append(f"{event.news_id}: {label} (potential)")
+                risks.append(f"{event.news_id}: {label} (возможный риск)")
             if event.impact_direction in {ImpactDirection.POSITIVE, ImpactDirection.MIXED}:
-                opportunities.append(f"{event.news_id}: {label} (potential)")
+                opportunities.append(f"{event.news_id}: {label} (возможная возможность)")
         return risks, opportunities
 
     @staticmethod
@@ -735,15 +828,23 @@ class InsightEngine:
     ) -> list[str]:
         checks = []
         if any(e.hypothesis for e in events):
-            checks.append("Verify hypotheses against primary sources before acting")
+            checks.append("\u0421\u0432\u0435\u0440\u044c\u0442\u0435 \u043f\u0440\u0435\u0434\u0432\u0430\u0440\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0432\u044b\u0432\u043e\u0434\u044b \u0441 \u043f\u0435\u0440\u0432\u043e\u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0430\u043c\u0438 \u043f\u0435\u0440\u0435\u0434 \u043f\u0440\u0438\u043d\u044f\u0442\u0438\u0435\u043c \u0440\u0435\u0448\u0435\u043d\u0438\u0439.")
         gaps = _profile_gaps(company)
         if gaps:
-            checks.append("Complete company profile fields: " + ", ".join(gaps))
+            field_labels = {
+                "industry": "\u043e\u0442\u0440\u0430\u0441\u043b\u044c",
+                "products/services": "\u043f\u0440\u043e\u0434\u0443\u043a\u0442\u044b \u0438 \u0443\u0441\u043b\u0443\u0433\u0438",
+                "cost drivers": "\u0444\u0430\u043a\u0442\u043e\u0440\u044b \u0437\u0430\u0442\u0440\u0430\u0442",
+                "geography": "\u0433\u0435\u043e\u0433\u0440\u0430\u0444\u0438\u044f \u0440\u0430\u0431\u043e\u0442\u044b",
+                "profile freshness date": "\u0434\u0430\u0442\u0430 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f \u043f\u0440\u043e\u0444\u0438\u043b\u044f",
+            }
+            missing = ", ".join(field_labels.get(gap, gap) for gap in gaps)
+            checks.append("\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u044c \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438: " + missing)
         unconfirmed = [r for r in relationships if r.dependency_evidence() == "hypothesis"]
         for rel in unconfirmed[:3]:
-            checks.append(f"Confirm whether {rel.counterparty_name} is a material dependency")
+            checks.append(f"\u0423\u0442\u043e\u0447\u043d\u0438\u0442\u0435, \u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f \u043b\u0438 {rel.counterparty_name} \u0441\u0443\u0449\u0435\u0441\u0442\u0432\u0435\u043d\u043d\u043e\u0439 \u0437\u0430\u0432\u0438\u0441\u0438\u043c\u043e\u0441\u0442\u044c\u044e \u0434\u043b\u044f \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438")
         if not checks:
-            checks.append("Re-check the event when a new source version or company profile is available")
+            checks.append("\u041f\u0435\u0440\u0435\u043f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0441\u043e\u0431\u044b\u0442\u0438\u0435 \u043f\u0440\u0438 \u043f\u043e\u044f\u0432\u043b\u0435\u043d\u0438\u0438 \u043d\u043e\u0432\u043e\u0439 \u0432\u0435\u0440\u0441\u0438\u0438 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0430 \u0438\u043b\u0438 \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438.")
         return checks
 
     @staticmethod
@@ -801,10 +902,10 @@ class InsightEngine:
             source="user_statement",
             confirmed_external=False,
         )
-        self.store.save_refinement(refinement)
-
         updated = InsightResult.from_dict(previous.to_dict())
         affected = set(affected_event_ids or [e.news_id for e in updated.events])
+        refinement.affected_event_ids = sorted(affected)
+        self.store.save_refinement(refinement)
         before = {e.news_id: e.to_dict() for e in updated.events}
         limitations = []
         user_link = EvidenceLink(
@@ -816,10 +917,36 @@ class InsightEngine:
             confirmed=False,
         )
 
+        synthesized = None
+        synthesis_error = None
+        if (
+            refinement_kind not in {RefinementKind.NOT_RELEVANT, RefinementKind.HORIZON}
+            and self.settings.use_llm
+            and self.llm is not None
+        ):
+            try:
+                synthesized = self._llm_adapt(previous, refinement, company, affected)
+            except (LLMError, SchemaValidationError) as exc:
+                synthesis_error = exc.message
+                limitations.append(f"Не удалось адаптировать анализ: {exc.message}")
+
+        if synthesized is not None:
+            synthesized_by_id = {event.news_id: event for event in synthesized.events}
+            updated.events = [
+                synthesized_by_id.get(event.news_id, event) for event in updated.events
+            ]
+            updated.summary = synthesized.summary or updated.summary
+            updated.unknowns = _dedupe_strings(updated.unknowns + synthesized.unknowns)
+            updated.recommended_checks = _dedupe_strings(
+                updated.recommended_checks + synthesized.recommended_checks
+            )
+            updated.limitations = _dedupe_strings(updated.limitations + synthesized.limitations)
+
         for event in updated.events:
             if event.news_id not in affected:
                 continue
-            event.evidence.append(user_link)
+            if not any(e.kind == "user_statement" and e.ref_id == user_link.ref_id for e in event.evidence):
+                event.evidence.append(user_link)
             if refinement_kind == RefinementKind.NOT_RELEVANT:
                 event.relevance_class = RelevanceClass.DROP
                 event.impact_direction = ImpactDirection.UNKNOWN
@@ -829,30 +956,30 @@ class InsightEngine:
                 event.potential_consequences = []
                 event.hypothesis = False
                 event.limitations.append(
-                    "event marked not relevant based on a user statement; not verified externally"
+                    "Событие отмечено как нерелевантное по заявлению пользователя; внешняя проверка не проводилась"
                 )
             elif refinement_kind == RefinementKind.HORIZON:
                 event.impact_horizon = (
                     horizon_value or _parse_horizon(refinement.text) or event.impact_horizon
                 )
-                event.limitations.append("impact horizon revised from a user statement")
+                event.limitations.append("Горизонт воздействия изменён по заявлению пользователя")
             elif refinement_kind == RefinementKind.DEPENDENCY:
                 if event.impact_type == ImpactType.UNKNOWN:
                     event.impact_type = ImpactType.INDIRECT
                 event.hypothesis = True
                 event.limitations.append(
-                    "user asserts a dependency; it is not confirmed by external data"
+                    "Пользователь указал на зависимость, но внешними данными она не подтверждена"
                 )
                 limitations.append(
-                    "dependency refinement is a user statement, not a confirmed external fact"
+                    "Уточнение о зависимости основано на заявлении пользователя, а не на подтверждённом внешнем факте"
                 )
-            else:
+            elif synthesized is None:
                 event.hypothesis = True
                 event.limitations.append(
-                    "analysis revised after a user refinement; affected by unverified user input"
+                    "Анализ изменён с учётом неподтверждённого ввода пользователя"
                 )
                 limitations.append(
-                    "user refinement applied; conclusions depending on it require external verification"
+                    "Применено уточнение пользователя; зависящие от него выводы требуют внешней проверки"
                 )
 
         updated.analysis_id = stable_id(
@@ -870,28 +997,48 @@ class InsightEngine:
             news_id for news_id, data in before.items()
             if next((e.to_dict() for e in updated.events if e.news_id == news_id), None) != data
         ]
-        updated.summary = (
-            previous.summary
-            + f" Refinement ({refinement_kind.value}) applied: {refinement.text[:200]}"
-        )
+        if synthesized is None:
+            updated.summary = (
+                previous.summary
+                + f" Применено уточнение ({refinement_kind.value}): {refinement.text[:200]}"
+            )
+        else:
+            updated.summary += f" Применено уточнение: {refinement.text[:200]}"
         updated.limitations = _dedupe_strings(
             list(previous.limitations)
+            + (synthesized.limitations if synthesized is not None else [])
             + limitations
-            + ["refinement was provided by the user and is not a confirmed external fact"]
+            + ["Уточнение предоставлено пользователем и не является подтверждённым внешним фактом"]
         )
         risks, opportunities = self._derive_risks_and_opportunities(updated.events)
-        updated.key_risks = risks
-        updated.potential_opportunities = opportunities
+        updated.key_risks = (
+            _dedupe_strings(synthesized.key_risks)
+            if synthesized is not None and synthesized.key_risks
+            else risks
+        )
+        updated.potential_opportunities = (
+            _dedupe_strings(synthesized.potential_opportunities)
+            if synthesized is not None and synthesized.potential_opportunities
+            else opportunities
+        )
         updated.unknowns = _dedupe_strings(
             list(previous.unknowns)
+            + (synthesized.unknowns if synthesized is not None else [])
             + [e.limitations[-1] for e in updated.events if e.limitations and e.news_id in affected]
         )
+        if synthesized is not None:
+            updated.missing_data = _dedupe_strings(previous.missing_data + synthesized.missing_data)
         updated.recommended_checks = _dedupe_strings(
             list(previous.recommended_checks)
-            + ["Verify refined conclusions against primary sources"]
+            + (synthesized.recommended_checks if synthesized is not None else [])
+            + ["Проверьте уточнённые выводы по первоисточникам"]
         )
-        updated.prompt_version = "refinement-rules.v1"
-        updated.model_id = "rule-engine"
+        updated.prompt_version = (
+            PROMPT_VERSIONS["adaptation"] if synthesized is not None else "refinement-rules.v1"
+        )
+        updated.model_id = self.llm.model_id if synthesized is not None and self.llm else "rule-engine"
+        if synthesis_error:
+            updated.analysis_status = AnalysisStatus.PARTIAL
         self.store.save_analysis(updated)
         self._logger.info(
             "analysis adapted analysis_id=%s parent=%s refinement=%s",
@@ -900,3 +1047,91 @@ class InsightEngine:
             refinement.refinement_id,
         )
         return updated
+
+    def _llm_adapt(
+        self,
+        previous: InsightResult,
+        refinement: Refinement,
+        company: CompanyProfile,
+        affected: set[str],
+    ):
+        """Re-evaluate a refinement with the model, while grounding output in stored evidence."""
+        events = [
+            event for event in previous.events
+            if event.news_id in affected and event.relevance_class != RelevanceClass.DROP
+        ]
+        # The insight schema deliberately excludes DROP events; process the
+        # remaining affected events through LLM adaptation independently.
+        if not events:
+            return None
+        processing_by_news = {
+            event.news_id: self.store.get_processing_result(event.news_id) for event in events
+        }
+        if any(result is None for result in processing_by_news.values()):
+            return None
+        relationships = self.relationships.list_relationships(
+            company.company_id, limit=self.settings.max_relationships
+        )
+        processing_items = list(processing_by_news.values())
+        first = processing_items[0]
+        combined = NewsProcessingResult.from_dict(first.to_dict())
+        combined.facts = [fact for item in processing_items for fact in item.facts]
+        combined.main_events = _dedupe_strings(
+            [main_event for item in processing_items for main_event in item.main_events]
+        )
+        combined_news_text = "\n".join(
+            self._news_text(item.news_id, item) for item in processing_items
+        )
+        context = self.classifier.builder.build(
+            company,
+            combined,
+            news_text=combined_news_text,
+            relationships=relationships,
+        ) if self.classifier is not None else None
+        if context is None:
+            return None
+        llm_refinement = Refinement.from_dict(refinement.to_dict())
+        llm_refinement.affected_event_ids = [event.news_id for event in events]
+        system_prompt, user_prompt = adaptation_prompts(previous, llm_refinement, context)
+        response = self.llm.complete_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            prompt_version=PROMPT_VERSIONS["adaptation"],
+            response_model=InsightResponse,
+        )
+        # The user statement is attached below with its own stored refinement
+        # ID. Do not accept a model-invented user_statement reference.
+        for raw_event in response.content.get("events", []):
+            if isinstance(raw_event, dict):
+                raw_event["evidence"] = [
+                    item for item in raw_event.get("evidence", [])
+                    if not isinstance(item, dict) or item.get("kind") != "user_statement"
+                ]
+        facts_by_news = {
+            news_id: {fact.fact_id: fact for fact in result.facts}
+            for news_id, result in processing_by_news.items()
+        }
+        old_evidence = {
+            (event.news_id, evidence.ref_id): evidence
+            for event in previous.events
+            for evidence in event.evidence
+            if evidence.kind == "analytics"
+        }
+        analytics_by_id = {
+            ref_id: type("StoredSnippet", (), {"text": evidence.quote})()
+            for (_, ref_id), evidence in old_evidence.items()
+        }
+        calculations_by_id = {
+            str(source.get("id")): source
+            for source in previous.sources_used
+            if source.get("type") == "calculation"
+        }
+        return validate_llm_insight(
+            response.content,
+            company_id=company.company_id,
+            requested_news_ids=[event.news_id for event in events],
+            facts_by_news=facts_by_news,
+            relationships=relationships,
+            analytics_by_id=analytics_by_id,
+            calculations_by_id=calculations_by_id,
+        )

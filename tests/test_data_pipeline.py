@@ -155,6 +155,9 @@ class DataPipelineTest(unittest.TestCase):
         kinds = {r.metadata["kind"] for r in rels}
         self.assertIn("shared_person", kinds)  # U_1 и U_3 связаны через F_1
         self.assertIn("same_group", kinds)  # U_1 и U_2 в группе g1
+        labels = {r.metadata["kind"]: r.metadata["label"] for r in rels if r.metadata["kind"] != "payment"}
+        self.assertEqual(labels, {"shared_person": "общие связанные физлица", "same_group": "одна группа компаний"})
+        self.assertEqual(top.metadata["label"], "входящие платежи")
 
     def test_exposure_with_unidentified_counterparties(self):
         result = calculate_sector_exposure(self.conn, "U_1", ["B"], "incoming")
@@ -190,6 +193,10 @@ class DataPipelineTest(unittest.TestCase):
         repo = SqliteCompanyRepository(self.conn)
         self.assertEqual([c["company_id"] for c in repo.list_companies()], ["U_1"])
         self.assertEqual(len(repo.list_companies(min_revenue=None)), 4)
+        name = repo.list_companies()[0]["display_name"]
+        self.assertIn(" · ", name)
+        self.assertTrue(name.endswith(" млрд"), name)
+        self.assertNotIn("U_1", name)
 
 
 if __name__ == "__main__":

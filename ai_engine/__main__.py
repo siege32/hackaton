@@ -6,8 +6,8 @@ Usage::
     python -m ai_engine init-db [--path ./intel.db]
     python -m ai_engine worker [--max-jobs N]
 
-The CLI only reads configuration from the environment (or ``.env`` loaded by
-the surrounding deployment).  It never prints the LLM API key.
+The CLI reads configuration from process environment and a local ``.env``
+file, without overriding process values. It never prints the LLM API key.
 """
 
 from __future__ import annotations

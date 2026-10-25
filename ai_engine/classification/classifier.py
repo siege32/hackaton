@@ -409,8 +409,18 @@ class CompanyNewsClassifier:
                 prompt_version=prompt_version,
             )
 
+        # If the model itself says material data is missing, it cannot at the
+        # same time conclude that the event is unrelated. Keep it for review.
+        # The missing_data list here is the model's list; context gaps are
+        # appended below and do not independently trigger this downgrade.
+        if assessment.relevance_class == RelevanceClass.DROP and assessment.missing_data:
+            assessment.relevance_class = RelevanceClass.REVIEW
+            assessment.limitations.append(
+                "DROP with missing company data was downgraded to REVIEW"
+            )
+
         # Missing profile data is relevant context, not automatically a
-        # negative fact.  Keep it visible in the stored assessment.
+        # negative fact. Keep it visible in the stored assessment.
         for gap in context.gaps:
             if gap not in assessment.missing_data:
                 assessment.missing_data.append(gap)

@@ -18,8 +18,8 @@ from ai_engine.storage.memory import (
     InMemoryRelationshipRepository,
 )
 
-FACT_PROMPT = "news-facts.v1"
-COMPANY_PROMPT = "company-relevance.v1"
+FACT_PROMPT = "news-facts.v2"
+COMPANY_PROMPT = "company-relevance.v2"
 INSIGHT_PROMPT = "company-insight.v1"
 
 GAS_NEWS = NewsRecord(
