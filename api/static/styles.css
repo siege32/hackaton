@@ -400,3 +400,8 @@ h1 { font: 700 32px/1.2 'Manrope', 'Segoe UI', sans-serif; letter-spacing: -.5px
   .main-area { margin-left: 0; }
   .overview-controls { grid-template-columns: 1fr; }
 }
+
+/* Позиция Альфа-Банка отдельно от выводов модели (ТЗ) */
+.bank-position { margin-top: 16px; padding: 12px 14px 4px; border-left: 3px solid var(--orange); border-radius: 3px; background: var(--orange-soft); }
+.bank-position .claim { border-top-color: rgba(0, 0, 0, .06); }
+.bank-position-note { margin: 6px 0 4px; color: #6b5a55; font-size: 12px; line-height: 1.5; }
