@@ -156,19 +156,19 @@ class CompanyContextBuilder:
     def _gaps(self, profile: CompanyProfile, relationships: list[Relationship]) -> list[str]:
         gaps = []
         if not profile.industry:
-            gaps.append("industry is missing")
+            gaps.append("не указана отрасль")
         if not profile.products_services and not profile.activities:
-            gaps.append("products/services and activities are missing")
+            gaps.append("не указаны продукты, услуги и виды деятельности")
         if not profile.cost_drivers and not profile.key_resources:
-            gaps.append("cost drivers / key resources are missing")
+            gaps.append("не указаны факторы затрат и ключевые ресурсы")
         if not profile.geography:
-            gaps.append("geography of operations is missing")
+            gaps.append("не указана география деятельности")
         if not relationships:
-            gaps.append("no counterparty relationships are available")
+            gaps.append("нет данных о связях с контрагентами")
         if not profile.has_minimal_context():
-            gaps.append("company profile has no operational details")
+            gaps.append("в профиле нет операционных данных")
         if profile.updated_at is None:
-            gaps.append("profile freshness date is unknown")
+            gaps.append("неизвестна дата актуальности профиля")
         return gaps
 
     def _profile_exposures(

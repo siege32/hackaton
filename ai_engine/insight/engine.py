@@ -109,6 +109,15 @@ def _not_relevant_summary(reasons: list[tuple[str, str]]) -> str:
     return f"Новости не относятся к компании. Причины: {details}"
 
 
+_PROFILE_GAP_LABELS = {
+    "industry": "отрасль",
+    "products/services": "продукты и услуги",
+    "cost drivers": "факторы затрат",
+    "geography": "география работы",
+    "profile freshness date": "дата обновления профиля",
+}
+
+
 def _profile_gaps(profile: CompanyProfile) -> list[str]:
     gaps = []
     if not profile.industry:
@@ -300,7 +309,7 @@ class InsightEngine:
                 items, events, company, tools, budget, snippets_by_id, sources, limitations, unknowns
             )
             if analytics_unavailable:
-                missing_data.append("banking analytics search")
+                missing_data.append("поиск по аналитике банка")
 
         # Attach analytics/external evidence only to the event whose query
         # produced it (the search loop already did that).
@@ -385,8 +394,8 @@ class InsightEngine:
             limitations.append(
                 "Индекс банковской аналитики не настроен; банковская аналитика не использовалась"
             )
-            if "banking analytics search" not in missing_data:
-                missing_data.append("banking analytics search")
+            if "поиск по аналитике банка" not in missing_data:
+                missing_data.append("поиск по аналитике банка")
 
         if not events:
             if unavailable_events:
@@ -400,7 +409,7 @@ class InsightEngine:
             status = AnalysisStatus.COMPLETED
 
         missing_data = _dedupe_strings(
-            missing_data + [f"company profile: {gap}" for gap in _profile_gaps(company)]
+            missing_data + [f"профиль компании: {_PROFILE_GAP_LABELS.get(gap, gap)}" for gap in _profile_gaps(company)]
         )
         unknowns = _dedupe_strings(
             unknowns
@@ -551,7 +560,7 @@ class InsightEngine:
                         ref_id=snippet.snippet_id,
                         quote=snippet.text[:300],
                         source_id=snippet.source,
-                        supports=f"retrieved banking analytics relevant to query: {query}",
+                        supports=f"фрагмент аналитики банка по запросу: {query}",
                         confirmed=True,
                     )
                 )
@@ -583,7 +592,7 @@ class InsightEngine:
                             ref_id=ref,
                             quote=str(item.get("snippet") or item.get("title") or "")[:300],
                             source_id=ref,
-                            supports="unverified external search result",
+                            supports="непроверенный результат внешнего поиска",
                             confirmed=False,
                         )
                     )
