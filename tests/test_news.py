@@ -114,6 +114,18 @@ class PrefilterTest(unittest.TestCase):
     def test_summary_only_needs_review(self):
         self.assertEqual(prefilter("Пошлины на импорт", "Анонс", text_quality="summary_only").decision, REVIEW)
 
+    def test_single_critical_marker_in_text_is_review(self):
+        # Политическая заметка с одним упоминанием санкций мимоходом — не «Связано».
+        text = "Оппозиция набрала больше голосов. Ранее обсуждались санкции, но лидер отказался."
+        self.assertEqual(prefilter("Оппозиция обошла коалицию на выборах", text).decision, REVIEW)
+        self.assertEqual(prefilter("ЕС ввёл санкции против банков", text).decision, KEEP)
+        self.assertEqual(prefilter("Итоги выборов", text + " Новые санкции затронут экспорт.").decision, KEEP)
+
+    def test_manual_source_has_readable_name(self):
+        from data_pipeline.news.sources import MANUAL_SOURCE_ID, source_by_id
+
+        self.assertEqual(source_by_id(MANUAL_SOURCE_ID).name, "Добавлено вручную")
+
     def test_title_only_dropped(self):
         # ТАСС: страница закрыта (403), в RSS нет анонса — остаётся один заголовок.
         result = prefilter("Санкции против банков", "", text_quality="summary_only")

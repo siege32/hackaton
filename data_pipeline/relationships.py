@@ -56,10 +56,21 @@ class PaymentRelationshipRepository:
         self.conn = conn
 
     def list_relationships(self, company_id: str, limit: int = 50) -> list[Relationship]:
-        """Сначала структурные связи (физлица, группа), затем крупнейшие платёжные."""
+        """Сначала крупнейшие платёжные контрагенты (2/3 лимита), затем структурные связи
+        (физлица, группа), затем остальные платёжные.
+
+        Раньше структурные шли первыми, и при небольшом лимите (интерфейс берёт 12)
+        список состоял из одних «одна группа компаний» — платёжных контрагентов,
+        главного наблюдения о зависимостях, видно не было.
+        """
+        limit = max(0, limit)
         structural = self._shared_person_links(company_id) + self._group_links(company_id)
-        payments = self._payment_links(company_id)
-        return (structural + payments)[: max(0, limit)]
+        # По доле внутри своего направления: так в начало попадают и главные покупатели,
+        # и главные поставщики, а не только сторона с большими суммами.
+        payments = sorted(self._payment_links(company_id), key=lambda r: r.share or 0, reverse=True)
+        head = payments[: max(1, limit * 2 // 3)] if structural else payments
+        rest = payments[len(head):]
+        return (head + structural + rest)[:limit]
 
     # ------------------------------------------------------------------
     def _payment_links(self, company_id: str) -> list[Relationship]:

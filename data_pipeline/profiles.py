@@ -15,6 +15,7 @@ key_resources, cost_drivers, geography), поэтому поля заполне�
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from typing import Any
 
@@ -49,6 +50,10 @@ _CLIENT_TYPES = {
     "CLOSE_CLIENT": "клиент с закрытыми продуктами / уходящий",
     "PROSPECT": "потенциальный клиент",
 }
+
+
+def _bare_city(city: str) -> str:
+    return re.sub(r"^(?:г\.|город)\s*", "", city.strip(), flags=re.I).lower()
 
 
 def _countries(raw: str | None) -> list[str]:
@@ -158,6 +163,8 @@ def build_profile(conn: sqlite3.Connection, company_id: str) -> CompanyProfile |
 
     # --- география ----------------------------------------------------------------
     geography = [g for g in (c["city"], c["region"]) if g]
+    if len(geography) == 2 and _bare_city(geography[0]) == geography[1].lower():
+        geography = [geography[0]]  # «г. Москва · Москва» — город федерального значения
     geography += [f"ВЭД: {country}" for country in countries]
     if c["city"] or c["region"]:
         sources.append(_source("geography", ["CITY", "REGION", "FTS_COUNTRY_NAME"], line,
@@ -234,7 +241,10 @@ def build_profile(conn: sqlite3.Connection, company_id: str) -> CompanyProfile |
         financials=financials,
         data_sources=sources,
         updated_at=None,  # дата актуальности выгрузки в кейсе не указана
-        raw={"csv_row": {k: v for k, v in c.items()}, "missing_data": missing},
+        # Сырую строку CSV (prod_lea=1, FACTORING_MARK…) сюда не кладём: ai_engine отдаёт профиль
+        # в LLM целиком, и модель цитировала служебные коды в выводах. Все значения уже есть
+        # в читаемых полях выше, а происхождение — в data_sources.
+        raw={"missing_data": missing},
     )
 
 

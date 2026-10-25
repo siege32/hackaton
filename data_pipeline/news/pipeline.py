@@ -16,7 +16,7 @@ from typing import Any
 from .clean import clean_article
 from .fetch import Downloader, FeedItem, FetchError, extract_article, fetch_article, http_get, parse_rss
 from .prefilter import prefilter
-from .sources import MANUAL_SOURCE_ID, NewsSource, enabled_sources
+from .sources import MANUAL_SOURCE, NewsSource, enabled_sources
 from .store import IngestResult, ingest, known_url, log_fetch, now_iso
 
 logger = logging.getLogger("data_pipeline.news.pipeline")
@@ -102,7 +102,7 @@ def fetch_all(conn: sqlite3.Connection, *, sources: list[NewsSource] | None = No
     return {"run_id": run_id, "started_at": started, "finished_at": now_iso(), "totals": totals, "sources": results}
 
 
-_MANUAL = NewsSource(MANUAL_SOURCE_ID, "Добавлено вручную", "", "none")
+_MANUAL = MANUAL_SOURCE
 
 
 def add_manual_text(conn: sqlite3.Connection, title: str, text: str, *, url: str | None = None,

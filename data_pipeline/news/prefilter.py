@@ -8,8 +8,10 @@
 (``ai_engine.classification.context.TOPIC_TERMS``), чтобы этапы одинаково
 понимали «экономическую тему».
 
-- KEEP   — есть экономические темы или критичные маркеры (санкции, ставка ЦБ...);
-- REVIEW — тем нет, но есть признаки бизнеса (компании, рынок, отрасль) или текст неполный;
+- KEEP   — есть экономические темы или критичные маркеры (санкции, ставка ЦБ...) в заголовке
+  или повторённые в тексте;
+- REVIEW — тем мало (в т.ч. одно упоминание критичного маркера в тексте), есть признаки бизнеса
+  (компании, рынок, отрасль) или текст неполный;
 - DROP   — нет признаков деловой тематики, рубрика нерелевантна, новость устарела
   или у неё нет текста (только заголовок).
 """
@@ -111,6 +113,10 @@ def prefilter(
     topics = sorted(hits)
     critical_match = _CRITICAL.search(full)
     critical = bool(critical_match)
+    # Сам по себе маркер в тексте — слабый сигнал: политическая заметка о выборах в Сербии
+    # упоминает «санкции» один раз мимоходом. Сразу в KEEP — только маркер в заголовке
+    # или повторённый в тексте; одно упоминание даёт REVIEW (новость всё равно разбирается).
+    critical_strong = bool(_CRITICAL.search(title)) or len(_CRITICAL.findall(full)) >= 2
 
     age = _age_days(published_at, now)
     if age is not None and age > MAX_AGE_DAYS and not manual:
@@ -129,7 +135,7 @@ def prefilter(
     if hits:
         reasons.append("темы в тексте: " + ", ".join(f"{t}×{n}" for t, n in sorted(hits.items())))
 
-    if critical or title_topics or strong:
+    if critical_strong or title_topics or strong:
         decision = KEEP
         if text_quality == "summary_only":
             decision = REVIEW
@@ -139,7 +145,7 @@ def prefilter(
     rubric = ", ".join(categories or [])
     if rubric and _IRRELEVANT_RUBRICS.search(rubric):
         return PrefilterResult(DROP, [f"нерелевантная рубрика: {rubric}"], topics, critical)
-    if hits or _BUSINESS.search(full) or manual:
+    if hits or critical or _BUSINESS.search(full) or manual:
         why = ("добавлена вручную" if manual else
                "слабые экономические признаки" if hits else "есть признаки бизнеса без явной экономической темы")
         return PrefilterResult(REVIEW, [why, *reasons], topics, critical)

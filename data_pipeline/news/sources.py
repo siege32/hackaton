@@ -40,8 +40,10 @@ SOURCES: tuple[NewsSource, ...] = (
 
 #: Источник для новостей, добавленных вручную (по ссылке или тексту).
 MANUAL_SOURCE_ID = "manual"
+MANUAL_SOURCE = NewsSource(MANUAL_SOURCE_ID, "Добавлено вручную", "", "none")
 
-_BY_ID = {s.source_id: s for s in SOURCES}
+#: Ручной источник тоже ищется по id: иначе в ленте вместо названия виден код «manual».
+_BY_ID = {s.source_id: s for s in (*SOURCES, MANUAL_SOURCE)}
 
 
 def source_by_id(source_id: str) -> NewsSource | None:
