@@ -228,6 +228,16 @@ class DemoDataTest(unittest.TestCase):
                 rels = PaymentRelationshipRepository(conn).list_relationships("U_DEMO_002", limit=50)
                 kinds = {r.metadata.get("kind") for r in rels}
                 self.assertTrue({"payment", "shared_person", "same_group"} <= kinds)
+                # При коротком лимите (интерфейс берёт 12) сначала платёжные контрагенты.
+                short = PaymentRelationshipRepository(conn).list_relationships("U_DEMO_002", limit=6)
+                self.assertEqual([r.metadata["kind"] for r in short[:4]], ["payment"] * 4)
+                self.assertNotEqual(short[-1].metadata["kind"], "payment")
+
+                profile = SqliteCompanyRepository(conn).get_company("U_DEMO_001")
+                self.assertEqual(profile.geography[0], "г. Москва")
+                self.assertNotIn("Москва", profile.geography)  # «г. Москва · Москва» без повтора
+                self.assertNotIn("csv_row", profile.raw)  # служебные коды CSV не уходят в LLM
+                self.assertNotIn("prod_lea", str(profile.to_dict()))
             finally:
                 conn.close()
 
