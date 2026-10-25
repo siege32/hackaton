@@ -1,6 +1,8 @@
 """CLI модуля данных.
 
     python -m data_pipeline build                     # CSV -> data/processed/companies.sqlite
+    python -m data_pipeline demo-data                 # синтетические CSV кейса -> data/demo/
+    python -m data_pipeline --raw-dir data/demo build # собрать базу из демо-набора
     python -m data_pipeline report                    # отчёт о качестве данных
     python -m data_pipeline companies [--all] [-q ..] # список компаний (по умолчанию крупный бизнес)
     python -m data_pipeline profile U_123             # профиль компании (JSON)
@@ -48,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("build", help="собрать базу из CSV")
     sub.add_parser("report", help="показать отчёт о качестве данных")
+    p = sub.add_parser("demo-data", help="сгенерировать синтетические CSV в формате кейса")
+    p.add_argument("--out", default="data/demo", help="куда записать три CSV")
     p = sub.add_parser("companies", help="список компаний")
     p.add_argument("--all", action="store_true", help="не ограничивать крупным бизнесом")
     p.add_argument("-q", "--query", help="поиск по ID, ОКВЭД, региону, городу")
@@ -115,6 +119,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command.startswith("news-"):
         return _news_command(args, settings)
+
+    if args.command == "demo-data":
+        from .demo import generate_demo
+
+        _print(generate_demo(args.out))
+        print(f"\nСобрать базу: python -m data_pipeline --raw-dir {args.out} build", file=sys.stderr)
+        return 0
 
     if args.command == "build":
         started = time.monotonic()

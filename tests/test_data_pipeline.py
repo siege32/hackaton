@@ -199,5 +199,38 @@ class DataPipelineTest(unittest.TestCase):
         self.assertNotIn("U_1", name)
 
 
+class DemoDataTest(unittest.TestCase):
+    """Демо-набор для жюри: собирается, детерминирован, совпадает с data/demo/."""
+
+    def test_demo_builds_and_matches_committed_files(self):
+        from data_pipeline.demo import DEMO_DIR, generate_demo
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "demo"
+            counts = generate_demo(out)
+            self.assertEqual(counts["large_companies"], 12)
+            committed = Path(__file__).resolve().parents[1] / DEMO_DIR
+            for csv_file in sorted(out.glob("*.csv")):
+                self.assertEqual(csv_file.read_text(encoding="utf-8").splitlines(),
+                                 (committed / csv_file.name).read_text(encoding="utf-8").splitlines(),
+                                 f"{csv_file.name} устарел: python -m data_pipeline demo-data")
+
+            report = build_database(out, Path(tmp) / "demo.sqlite")
+            self.assertEqual(report["companies"]["large_business_companies"], 12)
+            self.assertEqual(report["companies"]["ambiguous_ids"], [])
+            self.assertEqual(report["payments"]["self_payment_rows_excluded"], 1)
+            self.assertGreater(report["person_links"]["persons_linked_to_several_companies"], 0)
+
+            conn = connect(Path(tmp) / "demo.sqlite")
+            try:
+                fuel = get_counterparty_exposure(conn, "U_DEMO_001", ["B", "19"])
+                self.assertGreater(fuel["data"]["outgoing"]["value"], 0.2)
+                rels = PaymentRelationshipRepository(conn).list_relationships("U_DEMO_002", limit=50)
+                kinds = {r.metadata.get("kind") for r in rels}
+                self.assertTrue({"payment", "shared_person", "same_group"} <= kinds)
+            finally:
+                conn.close()
+
+
 if __name__ == "__main__":
     unittest.main()
