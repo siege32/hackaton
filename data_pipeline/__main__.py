@@ -39,9 +39,9 @@ def _print(data: Any) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     settings = DataSettings.from_env()
     parser = argparse.ArgumentParser(prog="python -m data_pipeline", description="Подготовка данных SXSVN")
     parser.add_argument("--raw-dir", default=str(settings.raw_dir), help="папка с исходными CSV")
@@ -129,7 +129,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "build":
         started = time.monotonic()
-        report = build_database(args.raw_dir, args.db)
+        try:
+            report = build_database(args.raw_dir, args.db)
+        except FileNotFoundError as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
+            return 2
         report["build_seconds"] = round(time.monotonic() - started, 1)
         _print(report)
         print(f"\nБаза собрана: {args.db}", file=sys.stderr)

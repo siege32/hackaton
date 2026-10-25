@@ -287,14 +287,19 @@ def ocr_page(
 
 
 def _find_pdf(reports_dir: Path, file: str) -> Path | None:
-    """Имя файла может отличаться нормализацией Unicode (кириллическая «К» и т.п.)."""
-    direct = reports_dir / file
-    if direct.exists():
-        return direct
+    """Имя файла может отличаться нормализацией Unicode (кириллическая «К» и т.п.).
+
+    PDF ищутся в ``reports_dir`` (по умолчанию ``data/raw/bank_reports``), а затем
+    в родительской папке: часто их кладут прямо в ``data/raw/`` рядом с CSV.
+    """
     target = unicodedata.normalize("NFC", file)
-    for candidate in reports_dir.glob("*.pdf"):
-        if unicodedata.normalize("NFC", candidate.name) == target:
-            return candidate
+    for folder in (reports_dir, reports_dir.parent):
+        direct = folder / file
+        if direct.exists():
+            return direct
+        for candidate in folder.glob("*.pdf"):
+            if unicodedata.normalize("NFC", candidate.name) == target:
+                return candidate
     return None
 
 
