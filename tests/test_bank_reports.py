@@ -11,7 +11,7 @@ from pathlib import Path
 from ai_engine.storage.base import AnalyticsIndex
 from data_pipeline.reports import ocr
 from data_pipeline.reports.catalog import DOCUMENTS, document_by_id
-from data_pipeline.reports.index import BankReportsIndex, search_bank_reports, tokenize
+from data_pipeline.reports.index import BankReportsIndex, _split_page, clean_text, search_bank_reports, tokenize
 
 PAGE_TEXT = (
     "**ЦБ РФ принял решение оставить ставку неизменной на уровне 14,0%:** ЦБ РФ взял паузу.\n\n"
@@ -165,6 +165,74 @@ class IndexTest(unittest.TestCase):
         self.assertTrue(any("низкой уверенностью" in w for w in gold["warnings"]))
         empty_index = BankReportsIndex(Path(self.tmp.name) / "nothing")
         self.assertEqual(search_bank_reports(empty_index, "ставка")["status"], "error")
+
+
+CHART_PAGE = """**А**
+
+# Центр макроэкономического анализа
+
+**Рис. 10: Прогноз Альфа-Банка по движению ключевой ставки, %**
+
+[График] Рис. 10: Прогноз Альфа-Банка по движению ключевой ставки, %
+- Ось Y: 17,0; 16,0; 15,0; 14,0; 13,0; 12,0
+- Ось X: окт.26, дек.26, дек.27
+- Подписи значений: 14,0%, 14,0%, 12,0%
+
+*Источники: ЦБ РФ, Альфа-Банк*
+
+**Рис. 11: Динамика курса рубля, руб./$**
+
+[График] Рис. 11: Динамика курса рубля, руб./$
+- Ось Y: 115, 105, 95, 85, 75, 65
+- Ось X: авг.23, ноя.23, фев.24, май.24, авг.24
+- Легенда: USD/RUB
+
+□ **Курс рубля останется крепким.** Мы ожидаем, что курс рубля к доллару до конца года останется в диапазоне 80–85 руб./$ на фоне высоких ставок и слабого импорта, а *риски ослабления* связаны с бюджетом.
+
+| Показатель | 2026 | 2027 |
+|---|---|---|
+| Курс рубля на конец года, руб./$ | 82 | 88 |
+| Инфляция на конец года, % г/г | 7,5 | 5,0 |
+
+Аналитика Альфа-КИБ | Обзор. Август 2026 г. — 3
+"""
+
+
+class CleanupTest(unittest.TestCase):
+    """Чистка OCR-текста: разметка, мусорные символы, шкалы графиков, виды фрагментов."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        write_page(Path(self.tmp.name), "alfa_policy_rate_2026_09_11", 3, CHART_PAGE)
+        self.index = BankReportsIndex(Path(self.tmp.name), as_of=date(2026, 10, 22))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_markup_and_artifacts_removed(self):
+        text = clean_text(CHART_PAGE)
+        for junk in ("**", "□", "# ", "Источники", "Аналитика Альфа-КИБ", "Центр макроэкономического"):
+            self.assertNotIn(junk, text)
+        self.assertNotIn("А", text.splitlines())  # логотип банка, распознанный как буква
+        self.assertIn("• Курс рубля останется крепким.", text)
+        self.assertIn("а риски ослабления связаны", text)
+
+    def test_chart_axes_dropped_but_labelled_dates_kept(self):
+        kinds = dict((text.splitlines()[0], kind) for kind, text in _split_page(CHART_PAGE))
+        charts = [text for kind, text in _split_page(CHART_PAGE) if kind == "chart"]
+        self.assertEqual(len(charts), 2)
+        forecast, rouble = charts
+        self.assertNotIn("Ось Y", forecast + rouble)
+        self.assertIn("Ось X: окт.26, дек.26, дек.27", forecast)  # даты к подписанным значениям
+        self.assertNotIn("Ось X", rouble)  # без подписанных значений ось X — просто шкала
+        self.assertEqual(forecast.count("Рис. 10"), 1)  # подпись-дубль перед графиком не повторяется
+        self.assertIn("table", kinds.values())
+
+    def test_analyst_text_ranks_above_chart_caption(self):
+        top = self.index.search("курс рубля", limit=1)[0]
+        self.assertEqual(top.metadata["kind"], "text")
+        self.assertIn("Мы ожидаем", top.text)
+        self.assertEqual({c.kind for c in self.index.chunks}, {"text", "chart", "table"})
 
 
 class CatalogTest(unittest.TestCase):

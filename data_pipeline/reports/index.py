@@ -30,6 +30,8 @@ STALE_AFTER_DAYS = 365
 _CHUNK_TARGET = 900
 #: Фрагменты короче этого склеиваются со следующим абзацем (заголовки, подписи).
 _CHUNK_MIN = 250
+#: Абзац короче этого прямо перед графиком/таблицей считается их подписью.
+_CAPTION_MAX = 200
 _STEM = 6
 _MIN_SCORE = 0.5
 _BOILERPLATE = (
@@ -82,25 +84,131 @@ class Chunk:
     text: str
     confidence: str | None
     tokens: list[str] = field(default_factory=list)
+    #: ``text`` — текст аналитика, ``table`` — таблица, ``chart`` — описание графика.
+    kind: str = "text"
 
 
-def _split_page(text: str) -> list[str]:
-    """Абзацы страницы, склеенные до ~_CHUNK_TARGET символов; служебный текст отбрасывается."""
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    chunks, current = [], ""
-    for para in paragraphs:
-        if any(marker in para.lower() for marker in _BOILERPLATE):
+#: Вид фрагмента -> множитель оценки. Описания графиков и таблицы — подписи и ряды
+#: чисел: совпадение слов в подписи («Динамика курса рубля») не значит, что там есть
+#: позиция банка, поэтому при равной релевантности выше текст аналитика.
+KIND_WEIGHTS = {"text": 1.0, "table": 0.6, "chart": 0.5}
+
+_CHART_MARK = re.compile(r"\[(?:График|Диаграмма|Рисунок|Схема)\]\s*", re.I)
+#: Строки-артефакты распознавания: логотип «А», колонтитулы, номера страниц, источники.
+_NOISE_LINE = re.compile(
+    r"^(?:а|альфа[- ]?банк|центр макроэкономического анализа|рынок облигаций|бонд бриф: итоги недели|\d{1,3}"
+    r"|\[(?:логотип|изображение|фото|иконка)[^\]]*\]|источник[и]?:.*|примечание:.*|аналитика альфа-киб.*|-{3,}|_{3,})$",
+    re.I,
+)
+#: Маркеры списков из символьных шрифтов PDF («□», «❑», «», «») -> обычная точка списка.
+_BULLETS = re.compile(r"^[ \t>]*[□❑■▪◆●♦➢➤►�][ \t]*", re.M)
+
+
+def clean_text(text: str) -> str:
+    """Убрать разметку Markdown и артефакты распознавания, оставив смысловой текст."""
+    text = text.replace("\\*", "*")
+    text = _BULLETS.sub("• ", text)
+    text = re.sub(r"[□❑■▪◆♦�]", "", text)
+    text = re.sub(r"\*\*|__", "", text)
+    text = re.sub(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])", r"\1", text)  # *курсив*
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"^#{1,6}\s*", "", line).strip()
+        if line.startswith("*") and not line.startswith("* "):
+            line = line.lstrip("*").strip()  # сноска «*Источники: …»
+        if _NOISE_LINE.match(line.rstrip(".*").strip()):
             continue
-        if current and len(current) >= _CHUNK_MIN and len(current) + len(para) > _CHUNK_TARGET:
-            chunks.append(current)
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _chart_summary(block: str) -> str:
+    """Описание графика без шкал: название, легенда, подписанные значения.
+
+    Шкала значений (ось Y) — ряд чисел без смысла, её убираем. Ось X (даты, периоды)
+    оставляем, только если на графике есть подписанные значения: иначе прогноз
+    «16,0%, 15,5% … 12,0%» потеряет даты, к которым относится.
+    """
+    parts = []
+    for line in block.splitlines():
+        # Однострочный формат «[График] Название. Ось Y: 90–120. Легенда: …» режем по предложениям.
+        parts += re.split(r"(?<=\.)\s+(?=[А-ЯA-Z])", line) if "Ось" in line and not line.lstrip("- ").startswith("Ось") else [line]
+    parts = [p.strip().lstrip("- ").strip() for p in parts]
+    labelled = any(re.match(r"Подпис", p) for p in parts)
+    kept = [
+        _CHART_MARK.sub("График: ", p, count=1) for p in parts
+        if p and not (re.match(r"Ось\b", p) and not (labelled and re.match(r"Ось [XХ]\b", p)))
+    ]
+    return "\n".join(kept)
+
+
+def _is_caption(para: str) -> bool:
+    """Подпись или заголовок («Рис. 5: …», «Динамика курса рубля»), а не предложение аналитика."""
+    if len(para) >= _CAPTION_MAX or "\n" in para.strip():
+        return False
+    return bool(re.match(r"(?:Рис|Табл|Таблица|График|Диаграмма)\b", para)) or not re.search(r"[.!?…](?:\s|$)", para)
+
+
+def _blocks(text: str) -> list[tuple[str, str]]:
+    """Абзацы очищенной страницы с видом: ``text`` / ``table`` / ``chart``."""
+    out = []
+    for para in re.split(r"\n\s*\n", clean_text(text)):
+        para = para.strip()
+        if not para or any(marker in para.lower() for marker in _BOILERPLATE):
+            continue
+        lines = para.splitlines()
+        if _CHART_MARK.search(para):
+            head, _, chart = para.partition(_CHART_MARK.search(para).group(0))
+            if head.strip() and not _CHART_MARK.sub("", chart).startswith(head.strip()[:30]):
+                out.append(("text", head.strip()))  # текст перед графиком в том же абзаце
+            out.append(("chart", _chart_summary(_CHART_MARK.search(para).group(0) + chart)))
+        elif sum(line.lstrip().startswith("|") for line in lines) >= max(2, len(lines) // 2):
+            out.append(("table", para))
+        else:
+            out.append(("text", para))
+    # Подпись графика или таблицы («Рис. 5: …», «Табл.1: …») обычно стоит отдельным
+    # коротким абзацем прямо перед ними: если она повторяет название графика — дубль,
+    # иначе становится первой строкой графика/таблицы. Отдельным крошечным фрагментом
+    # её оставлять нельзя: BM25 завышает оценку коротким фрагментам.
+    merged: list[tuple[str, str]] = []
+    for kind, para in out:
+        if kind != "text" and merged and merged[-1][0] == "text" and _is_caption(merged[-1][1]):
+            caption = merged.pop()[1]
+            if caption.rstrip(".:") not in para:
+                para = f"{caption}\n{para}"
+        merged.append((kind, para))
+    return merged
+
+
+def _split_page(text: str) -> list[tuple[str, str]]:
+    """Фрагменты страницы с видом: текст аналитика склеивается по абзацам до ~_CHUNK_TARGET
+    символов, графики и таблицы идут отдельными фрагментами (у них ниже вес в поиске)."""
+    chunks: list[tuple[str, str]] = []
+    current = ""
+
+    def flush() -> None:
+        nonlocal current
+        if not current:
+            return
+        if chunks and chunks[-1][0] == "text" and len(current) < _CHUNK_MIN:
+            chunks[-1] = ("text", f"{chunks[-1][1]}\n\n{current}")
+        else:
+            chunks.append(("text", current))
+        current = ""
+
+    for kind, para in _blocks(text):
+        if kind != "text":
+            if current and _is_caption(current) and (not chunks or chunks[-1][0] != "text"):
+                # Короткий текст между графиками (заголовок раздела) — подпись к следующему.
+                para, current = f"{current}\n{para}", ""
+            flush()
+            chunks.append((kind, para))
+        elif current and len(current) >= _CHUNK_MIN and len(current) + len(para) > _CHUNK_TARGET:
+            flush()
             current = para
         else:
             current = f"{current}\n\n{para}" if current else para
-    if current:
-        if chunks and len(current) < _CHUNK_MIN:
-            chunks[-1] = f"{chunks[-1]}\n\n{current}"
-        else:
-            chunks.append(current)
+    flush()
     return chunks
 
 
@@ -133,8 +241,9 @@ class BankReportsIndex:
             page = json.loads(path.read_text(encoding="utf-8"))
             doc = document_by_id(page["document_id"])
             title_tokens = tokenize(" ".join([doc.title, *doc.topics])) if doc else []
-            texts = [t for t in _split_page(page.get("text") or "") if len(re.findall(r"[а-яёa-z]", t, re.I)) >= 40]
-            for n, text in enumerate(texts, start=1):
+            parts = [(k, t) for k, t in _split_page(page.get("text") or "")
+                     if len(re.findall(r"[а-яёa-z]", t, re.I)) >= 40]
+            for n, (kind, text) in enumerate(parts, start=1):
                 self.chunks.append(Chunk(
                     chunk_id=f"{page['document_id']}:p{page['page']}:c{n}",
                     document_id=page["document_id"],
@@ -142,6 +251,7 @@ class BankReportsIndex:
                     text=text,
                     confidence=page.get("confidence"),
                     tokens=with_bigrams(tokenize(text)) + title_tokens,
+                    kind=kind,
                 ))
 
     @property
@@ -187,6 +297,7 @@ class BankReportsIndex:
                 "stale": self.is_stale(doc),
                 "notes": list(doc.notes) if doc else [],
                 "ocr_confidence": chunk.confidence,
+                "kind": chunk.kind,
                 "origin": "bank_analytics",
             },
         )
@@ -202,7 +313,8 @@ class BankReportsIndex:
         """Протокол ``AnalyticsIndex``: лучшие фрагменты, не больше одного на страницу.
 
         1. Отбор по релевантности BM25 с мягкой поправкой на свежесть (не больше 25 %),
-           чтобы старый, но точный по теме отчёт не вытеснялся свежим мусором.
+           чтобы старый, но точный по теме отчёт не вытеснялся свежим мусором,
+           и на вид фрагмента (``KIND_WEIGHTS``: графики и таблицы ниже текста).
         2. Выдача упорядочена от новых отчётов к старым: банк меняет позицию
            (прогноз ставки на конец 2026 г.: 13,5 % в отчёте от 31.07 -> 14,0 % от 11.09),
            и агент должен сначала видеть самую свежую.
@@ -214,7 +326,7 @@ class BankReportsIndex:
         for chunk in self.chunks:
             relevance = self._score(terms, chunk)
             if relevance >= _MIN_SCORE:
-                weight = 0.75 + 0.25 * self.freshness(chunk.document_id)
+                weight = (0.75 + 0.25 * self.freshness(chunk.document_id)) * KIND_WEIGHTS[chunk.kind]
                 scored.append((relevance * weight, chunk))
         scored.sort(key=lambda item: item[0], reverse=True)
         picked, seen_pages = [], set()
