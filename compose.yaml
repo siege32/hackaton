@@ -1,0 +1,105 @@
+name: sxsvn
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sxsvn-intelligence:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_RAW_DIR: /app/data/raw
+      DATA_DB_PATH: /app/data/processed/companies.sqlite
+      NEWS_DB_PATH: /app/data/processed/news.sqlite
+      BANK_REPORTS_DIR: /app/data/raw/bank_reports
+      BANK_REPORTS_OCR_DIR: /app/data/bank_reports/ocr
+      INTEL_SQLITE_PATH: /app/data/processed/intel.sqlite
+      API_JOBS_DB_PATH: /app/data/processed/intel.sqlite
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - ./data/processed:/app/data/processed
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+
+  worker:
+    image: sxsvn-intelligence:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_RAW_DIR: /app/data/raw
+      DATA_DB_PATH: /app/data/processed/companies.sqlite
+      NEWS_DB_PATH: /app/data/processed/news.sqlite
+      BANK_REPORTS_DIR: /app/data/raw/bank_reports
+      BANK_REPORTS_OCR_DIR: /app/data/bank_reports/ocr
+      INTEL_SQLITE_PATH: /app/data/processed/intel.sqlite
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "ai_engine", "worker"]
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - ./data/processed:/app/data/processed
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging: *default-logging
+
+  init-data:
+    image: sxsvn-intelligence:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["init"]
+    env_file:
+      - .env
+    environment:
+      DATA_RAW_DIR: /app/data/raw
+      DATA_DB_PATH: /app/data/processed/companies.sqlite
+      NEWS_DB_PATH: /app/data/processed/news.sqlite
+      BANK_REPORTS_DIR: /app/data/raw/bank_reports
+      BANK_REPORTS_OCR_DIR: /app/data/bank_reports/ocr
+      INTEL_SQLITE_PATH: /app/data/processed/intel.sqlite
+    command: ["python", "-m", "data_pipeline", "build"]
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - ./data/processed:/app/data/processed
+    logging: *default-logging
+
+volumes:
+  redis_data:

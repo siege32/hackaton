@@ -112,13 +112,13 @@ class InsightEngineTests(unittest.TestCase):
         self.assertFalse(
             any(e.kind == "relationship" and e.ref_id == "rel-payment-1" for e in event.evidence)
         )
-        self.assertTrue(any("payment link" in limitation for limitation in event.limitations))
+        self.assertTrue(any("ссылка на оплату" in limitation for limitation in event.limitations))
 
     def test_missing_analytics_is_not_reported_as_used(self):
         service, store = self._classified(analytics=InMemoryAnalyticsIndex([]))
         result = service.analyze_company_impact("company-cement", [GAS_NEWS.news_id])
         self.assertNotIn("bank_service_analytics", {s["type"] for s in result.sources_used})
-        self.assertTrue(any("no banking analytics found" in item for item in result.unknowns))
+        self.assertTrue(any("В банковской аналитике не найдено данных" in item for item in result.unknowns))
 
     def test_analytics_tool_failure_yields_partial_result_not_loop(self):
         analytics = BrokenAnalytics()
@@ -169,7 +169,7 @@ class InsightEngineTests(unittest.TestCase):
         )
         self.assertLessEqual(analytics.calls, 2)
         self.assertLessEqual(result.additional_searches_used, 2)
-        self.assertTrue(any("budget" in limitation for limitation in result.limitations))
+        self.assertTrue(any("Лимит дополнительных поисковых запросов" in limitation for limitation in result.limitations))
 
     def test_budget_utility_raises_on_third_step(self):
         budget = SearchBudget(2)
@@ -216,7 +216,7 @@ class InsightEngineTests(unittest.TestCase):
         self.assertFalse(user_evidence[0].confirmed)
         self.assertTrue(event.hypothesis)
         self.assertEqual(event.impact_type, ImpactType.INDIRECT)
-        self.assertTrue(any("user" in limitation for limitation in adapted.limitations))
+        self.assertTrue(any("пользователем" in limitation for limitation in adapted.limitations))
 
     def test_horizon_refinement_updates_horizon(self):
         service, store = self._classified(analytics=InMemoryAnalyticsIndex([]))

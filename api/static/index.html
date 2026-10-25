@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f3f5f2">
     <title>SXSVN | Аналитика событий</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=3">
-    <script src="/assets/app.js?v=3" defer></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=7">
+    <script src="/assets/app.js?v=7" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -55,7 +55,7 @@
 
           <section class="home-service-banner" aria-label="Сервис аналитики SXSVN">
             <div class="home-service-copy"><span class="home-service-kicker">СЕРВИС ДЛЯ БИЗНЕСА</span><h2>Новости, которые влияют на решения</h2><p>Отслеживайте события рынка и оценивайте их влияние на выбранную компанию.</p><button class="button home-service-button" data-go="news">Открыть аналитику <span>↗</span></button></div>
-            <div class="home-service-side"><span>01</span><strong>Поток событий</strong><small>Источники · компании · разбор</small></div>
+            <div class="home-service-side"><span>АКТУАЛЬНО СЕЙЧАС</span><strong><b id="home-service-count">—</b> новостей</strong><small>В ленте KEEP и REVIEW</small></div>
           </section>
 
           <section class="control-row overview-controls" aria-label="Компания для обзора">
@@ -72,11 +72,11 @@
 
             <section class="panel analysis-panel" id="overview-analysis">
               <div class="analysis-empty" id="analysis-empty">
-                <div class="empty-index">01 <span>—</span> 03</div>
-                <div class="empty-cross">＋</div>
+
+                <div class="empty-cross" aria-hidden="true">⌕</div>
                 <p class="eyebrow">АНАЛИЗ СОБЫТИЯ</p>
-                <h2>Выберите новость<br>из ленты</h2>
-                <p class="empty-copy">Результат появится здесь вместе с основаниями, ограничениями и источниками.</p>
+                <h2>Выберите новость<br>для разбора</h2>
+                <p class="empty-copy">Выберите новость слева, чтобы прочитать публикацию и запустить анализ для компании.</p>
               </div>
               <div class="analysis-content hidden" id="analysis-content"></div>
             </section>
@@ -87,9 +87,9 @@
           <div class="page-heading"><div><p class="eyebrow">КАТАЛОГ ИСТОЧНИКОВ <span class="eyebrow-line"></span></p><h1>События</h1></div><button class="button button-secondary" id="open-add-news"><span class="button-symbol">＋</span>Добавить новость</button></div>
           <section class="control-row compact-controls">
             <label class="control news-search-control"><span>ПОИСК</span><div class="input-with-symbol"><span>⌕</span><input id="full-news-search" type="search" placeholder="Поиск по тексту и заголовкам"></div></label>
-            <label class="control filter-control"><span>РЕЛЕВАНТНОСТЬ</span><select id="full-relevance-filter"><option value="KEEP,REVIEW,DROP">Все категории</option><option value="KEEP,REVIEW">KEEP и REVIEW</option><option value="KEEP">KEEP</option><option value="REVIEW">REVIEW</option><option value="DROP">DROP</option></select></label>
+            <label class="control filter-control"><span>РЕЛЕВАНТНОСТЬ</span><select id="full-relevance-filter"><option value="KEEP,REVIEW,DROP">Все категории</option><option value="KEEP,REVIEW">Связано и нужна проверка</option><option value="KEEP">Связано</option><option value="REVIEW">Нужна проверка</option><option value="DROP">Не связано</option></select></label>
           </section>
-          <div class="news-layout"><div class="panel full-feed-panel"><div class="panel-heading"><div><p class="eyebrow">ПУБЛИКАЦИИ</p><h2>Лента источников</h2></div><span class="panel-count" id="full-news-count">—</span></div><div class="feed-list" id="full-feed"></div></div><article class="panel news-detail" id="news-detail"><div class="detail-placeholder"><span class="detail-marker">↖</span><p>Откройте событие, чтобы увидеть публикации кластера и запустить анализ.</p></div></article></div>
+          <div class="news-layout"><div class="panel full-feed-panel"><div class="panel-heading"><div><p class="eyebrow">ПУБЛИКАЦИИ</p><h2>Лента источников</h2></div><span class="panel-count" id="full-news-count">—</span></div><div class="feed-list" id="full-feed"></div></div><article class="panel news-detail" id="news-detail"><div class="detail-placeholder"><span class="detail-marker" aria-hidden="true">←</span><p>Выберите событие слева, чтобы открыть публикацию и запустить анализ.</p></div></article></div>
         </section>
 
         <section class="page-view" id="view-company">
@@ -98,9 +98,9 @@
         </section>
 
         <section class="page-view" id="view-reports">
-          <div class="page-heading"><div><p class="eyebrow">ПЕРВОИСТОЧНИКИ <span class="eyebrow-line"></span></p><h1>Аналитика банка</h1></div><span class="archive-count" id="report-count">АРХИВ · 9 ОТЧЁТОВ</span></div>
+          <div class="page-heading"><div><p class="eyebrow">ПЕРВОИСТОЧНИКИ <span class="eyebrow-line"></span></p><h1>Аналитика банка</h1></div><span class="archive-count" id="report-count">Поиск по архиву</span></div>
           <section class="report-search"><label for="report-query">ПОИСК ПО ФРАГМЕНТАМ И ОТЧЁТАМ</label><div class="report-search-line"><div class="input-with-symbol"><span>⌕</span><input id="report-query" type="search" placeholder="Ключевая ставка, кредитование, спрос…"></div><button class="button button-primary" id="search-reports">Найти</button></div><p>Цитаты сохраняют дату отчёта и номер страницы.</p></section>
-          <div class="report-results" id="report-results"><div class="report-initial"><span>09</span><p>Введите тему, чтобы найти подтверждённые фрагменты в банковских материалах.</p></div></div>
+          <div class="report-results" id="report-results"><div class="report-initial"><span aria-hidden="true">⌕</span><div><strong>Поиск по банковским отчётам</strong><p>Введите тему, чтобы найти фрагменты и открыть страницу-источник.</p></div></div></div>
         </section>
       </main>
     </div>

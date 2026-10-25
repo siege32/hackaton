@@ -27,6 +27,8 @@ const labels = {
   partial: 'Частичный результат', failed: 'Ошибка', queued: 'В очереди', running: 'Выполняется',
 };
 
+const ocrLabels = { high: 'высокая', medium: 'средняя', low: 'низкая' };
+
 function label(value) {
   return labels[value] || value || 'Не указано';
 }
@@ -76,6 +78,7 @@ function setBusy(button, busy, busyText = 'Подождите…') {
 
 function showView(name) {
   state.currentView = name;
+  window.scrollTo(0, 0);
   state.selectionRequest += 1;
   $$('.page-view').forEach(view => view.classList.toggle('active', view.id === `view-${name}`));
   $$('.nav-item').forEach(button => button.classList.toggle('active', button.dataset.view === name));
@@ -134,7 +137,7 @@ async function loadHealth() {
     const ready = services.company_data && services.news_catalog;
     $('#connection-dot').className = `connection-dot ${ready ? 'ready' : ''}`;
     $('#connection-label').textContent = ready ? 'Сервисы подключены' : 'Нужна подготовка данных';
-    $('#connection-detail').textContent = services.llm ? `LLM · ${health.model}` : 'Доступен режим правил';
+    $('#connection-detail').textContent = services.llm ? '\u041c\u043e\u0434\u0435\u043b\u044c \u0430\u043d\u0430\u043b\u0438\u0437\u0430 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0430' : '\u0414\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0440\u0435\u0437\u0435\u0440\u0432\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c';
   } catch (error) {
     $('#service-strip').innerHTML = statusChip('API', false);
     $('#connection-dot').className = 'connection-dot error';
@@ -154,7 +157,9 @@ async function loadCompanies(query = '') {
     select.innerHTML = '<option value="">Выберите компанию</option>' + state.companies.map(company => {
       const id = escapeHtml(company.company_id);
       const industry = company.industry ? ` · ${escapeHtml(company.industry)}` : '';
-      return `<option value="${id}">${id}${industry}</option>`;
+      // display_name — читаемая подпись из data_pipeline (данные обезличены); без неё — ID и отрасль.
+      const text = company.display_name ? escapeHtml(company.display_name) : `${id}${industry}`;
+      return `<option value="${id}">${text}</option>`;
     }).join('');
     select.value = selected;
   }
@@ -178,7 +183,7 @@ function renderFeed(items, target, limit = Infinity) {
     const lead = item.lead || item.text_quality || '';
     const chosen = state.selectedNews?.news_id === item.news_id ? 'selected' : '';
     return `<button class="feed-card ${chosen}" data-news-id="${escapeHtml(item.news_id)}">
-      <span class="feed-meta"><span>${escapeHtml(item.source_name || item.source_id || 'Источник')} · ${escapeHtml(dateLabel(item.published_at))}</span><span class="tag ${category}">${escapeHtml(label(item.prefilter || 'REVIEW'))}</span></span>
+      <span class="feed-meta"><span>${escapeHtml(item.source_name || item.source_id || 'Источник')} · <span class="feed-date">${escapeHtml(dateLabel(item.published_at))}</span></span><span class="tag ${category}">${escapeHtml(label(item.prefilter || 'REVIEW'))}</span></span>
       <span class="feed-title">${escapeHtml(title)}</span>
       ${lead ? `<span class="feed-lead">${escapeHtml(lead)}</span>` : ''}
       <span class="feed-foot">${Number(item.sources_in_cluster || 1)} ${pluralSources(item.sources_in_cluster || 1)}${item.novelty?.length ? ` · ${escapeHtml(item.novelty.length)} новых факта` : ''}</span>
@@ -210,9 +215,16 @@ async function loadNews(full = false, query = null) {
           .split(',').filter(Boolean).forEach(value => params.append('prefilter', value));
         response = await api(`/news?${params}`);
       }
-      state.news = response.items || [];
-      $('#full-news-count').textContent = `${state.news.length} событий`;
+      const allowed = ($('#full-relevance-filter')?.value || 'KEEP,REVIEW,DROP').split(',');
+      state.news = (response.items || []).filter(item => allowed.includes(item.prefilter || 'REVIEW'));
+      $('#full-news-count').textContent = `${state.news.length} \u0441\u043e\u0431\u044b\u0442\u0438\u0439`;
       renderFeed(state.news, '#full-feed');
+      if (state.currentView === 'news' && state.selectedNews && !state.news.some(item => item.news_id === state.selectedNews.news_id)) {
+        state.selectionRequest += 1;
+        state.selectedNews = null;
+        state.analysis = null;
+        $('#news-detail').innerHTML = '<div class="detail-placeholder"><span class="detail-marker" aria-hidden="true">\u2190</span><p>\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043e\u0431\u044b\u0442\u0438\u0435 \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0438\u0445 \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u043e\u0432.</p></div>';
+      }
       return;
     }
 
@@ -220,7 +232,8 @@ async function loadNews(full = false, query = null) {
     ['KEEP', 'REVIEW'].forEach(value => params.append('prefilter', value));
     const response = await api(`/news?${params}`);
     state.overviewNews = response.items || [];
-    $('#news-count').textContent = String(state.overviewNews.length).padStart(2, '0');
+    $('#news-count').textContent = String(state.overviewNews.length);
+    $('#home-service-count').textContent = String(state.overviewNews.length);
     renderFeed(state.overviewNews, '#overview-feed', 6);
   } catch (error) {
     const target = full ? '#full-feed' : '#overview-feed';
@@ -242,6 +255,7 @@ async function selectNews(newsId) {
     $('#analysis-empty')?.classList.add('hidden');
     $('#overview-analysis')?.classList.add('has-content');
     detail.innerHTML = '<div class="loading-row">Загружаю публикацию…</div>';
+    if (window.matchMedia('(max-width: 760px)').matches) requestAnimationFrame(() => detail.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }
   try {
     const payload = await api(`/news/${encodeURIComponent(newsId)}`);
@@ -443,13 +457,13 @@ function renderCompany(profile, exposure, relationships) {
     .sort((a, b) => (b.amount || 0) - (a.amount || 0)).slice(0, 7);
   const maxShare = Math.max(0.01, ...sectors.map(item => item.share || 0));
   const missing = profile.raw?.missing_data || [];
-  $('#company-content').innerHTML = `<div class="company-top"><article class="panel company-card"><p class="company-id">${escapeHtml(profile.company_id)}</p><h2>${escapeHtml(profile.name || profile.company_id)}</h2><p>${escapeHtml(profile.industry || 'Отрасль не определена')}${profile.subindustry ? ` · ${escapeHtml(profile.subindustry)}` : ''}</p></article>
+  $('#company-content').innerHTML = `<div class="company-top"><article class="panel company-card"><p class="company-id">\u041f\u0420\u041e\u0424\u0418\u041b\u042c \u041a\u041e\u041c\u041f\u0410\u041d\u0418\u0418</p><h2>${escapeHtml(profile.display_name || profile.raw?.display_name || profile.name || profile.company_id)}</h2><p>${escapeHtml(profile.industry || 'Отрасль не определена')}${profile.subindustry ? ` · ${escapeHtml(profile.subindustry)}` : ''}</p></article>
     <article class="panel stat-card"><small>ВЫРУЧКА</small><strong>${escapeHtml(money(financials.revenue?.value))}</strong><p>${escapeHtml(financials.revenue?.period || 'Период не указан')}</p></article>
     <article class="panel stat-card"><small>ВХОДЯЩИЕ ПОТОКИ</small><strong>${escapeHtml(formatCoverage(payments.incoming?.coverage))}</strong><p>${escapeHtml(payments.incoming?.counterparties ?? 'Нет данных')} контрагентов</p></article>
     <article class="panel stat-card"><small>ИСХОДЯЩИЕ ПОТОКИ</small><strong>${escapeHtml(formatCoverage(payments.outgoing?.coverage))}</strong><p>${escapeHtml(payments.outgoing?.counterparties ?? 'Нет данных')} контрагентов</p></article></div>
     <div class="company-columns"><section class="panel data-panel"><h2>Профиль</h2><div class="field-list">${flattenProfile(profile).map(([name, value]) => `<div class="field-row"><small>${name}</small><span>${escapeHtml(Array.isArray(value) ? value.join(' · ') : value)}</span></div>`).join('') || '<p class="empty-inline">Поля профиля отсутствуют.</p>'}</div>${missing.length ? `<div class="limitation"><strong>Пробелы в данных:</strong> ${escapeHtml(missing.slice(0, 5).join('; '))}${missing.length > 5 ? ` и ещё ${missing.length - 5}` : ''}</div>` : ''}</section>
     <section class="panel data-panel"><h2>Платёжные потоки по отраслям</h2>${sectors.length ? `<div class="bar-list">${sectors.map(sector => `<div class="bar-item"><span title="${escapeHtml(sector.section_name)}">${escapeHtml(sector.section_name)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (sector.share || 0) / maxShare * 100)}%"></div></div><strong>${formatCoverage(sector.share)}</strong></div>`).join('')}</div><div class="limitation">Доля платежей за период выгрузки, не доля выручки и не вероятность убытка. Неизвестные отрасли отражены отдельно.</div>` : '<p class="empty-inline">Платёжная структура недоступна.</p>'}</section></div>
-    <section class="panel data-panel"><h2>Связи и контрагенты <span class="tag review">Наблюдения, не подтверждённая зависимость</span></h2>${relationships.length ? relationships.slice(0, 8).map(item => `<div class="source-row"><span class="tag">${escapeHtml(item.relation_type || 'other')}</span><strong>${escapeHtml(item.counterparty_name || item.counterparty_id)}</strong><span>${escapeHtml(item.direction || '')}</span><span>${item.share == null ? '' : formatCoverage(item.share)}</span><span>${item.confirmed ? 'Подтверждено' : 'Не подтверждено'}</span></div>`).join('') : '<p class="empty-inline">Связи не найдены.</p>'}</section>`;
+    <section class="panel data-panel"><h2>Связи и контрагенты <span class="tag review">Наблюдения, не подтверждённая зависимость</span></h2>${relationships.length ? relationships.slice(0, 8).map(item => `<div class="source-row"><span class="tag">${escapeHtml(item.metadata?.label || item.relation_type || 'связь')}</span><strong>${escapeHtml(item.counterparty_name || item.counterparty_id)}</strong><span>${item.metadata?.label || item.direction === 'none' ? '' : escapeHtml(item.direction || '')}</span><span>${item.share == null ? '' : formatCoverage(item.share)}</span><span>${item.confirmed ? 'Подтверждено' : 'Не подтверждено'}</span></div>`).join('') : '<p class="empty-inline">Связи не найдены.</p>'}</section>`;
 }
 
 function formatCoverage(value) {
@@ -477,14 +491,14 @@ async function searchReports() {
 }
 
 function renderReports(items) {
-  $('#report-count').textContent = `НАЙДЕНО · ${String(items.length).padStart(2, '0')}`;
+  $('#report-count').textContent = `\u041d\u0430\u0439\u0434\u0435\u043d\u043e: ${items.length}`;
   if (!items.length) {
     $('#report-results').innerHTML = '<div class="report-initial"><span>—</span><p>Фрагменты по запросу не найдены.</p></div>';
     return;
   }
   $('#report-results').innerHTML = items.map(item => {
     const meta = item.metadata || {};
-    return `<article class="report-card"><div class="report-card-top"><span class="tag">${escapeHtml(meta.report_date || 'Дата не указана')}</span><span>${escapeHtml(meta.period || '')}</span>${meta.stale ? '<span class="tag review">Исторический материал</span>' : ''}${meta.ocr_confidence ? `<span class="tag">OCR · ${escapeHtml(meta.ocr_confidence)}</span>` : ''}</div><h2>${escapeHtml(item.title)}</h2><blockquote>${escapeHtml(item.text)}</blockquote><div class="report-card-foot"><span>${escapeHtml(item.source)}</span><span>Страница ${escapeHtml(meta.page ?? '—')} · релевантность ${escapeHtml(item.score ?? '—')}</span></div>${(meta.notes || []).map(note => `<div class="limitation">${escapeHtml(note)}</div>`).join('')}</article>`;
+    return `<article class="report-card"><div class="report-card-top"><span class="tag">${escapeHtml(meta.report_date || 'Дата не указана')}</span><span>${escapeHtml(meta.period || '')}</span>${meta.stale ? '<span class="tag review">Исторический материал</span>' : ''}${meta.ocr_confidence ? `<span class="tag">Точность OCR: ${escapeHtml(ocrLabels[meta.ocr_confidence] || meta.ocr_confidence)}</span>` : ''}</div><h2>${escapeHtml(item.title)}</h2><blockquote>${escapeHtml(item.text)}</blockquote><div class="report-card-foot"><span>${escapeHtml(item.source)}</span><span>Страница ${escapeHtml(meta.page ?? '—')} · релевантность ${item.score == null ? '—' : escapeHtml(Number(item.score).toFixed(2).replace('.', ','))}</span></div>${(meta.notes || []).map(note => `<div class="limitation">${escapeHtml(note)}</div>`).join('')}</article>`;
   }).join('');
 }
 
