@@ -167,9 +167,13 @@ def _number(value: str | None) -> float | None:
 def build_database(raw_dir: str | Path, db_path: str | Path) -> dict[str, Any]:
     """Собрать базу заново из CSV. Возвращает отчёт о качестве данных."""
     raw_dir, db_path = Path(raw_dir), Path(db_path)
-    for name in (COMPANIES_CSV, PAYMENTS_CSV, PERSON_LINKS_CSV):
-        if not (raw_dir / name).exists():
-            raise FileNotFoundError(f"Нет исходного файла {raw_dir / name}")
+    missing = [name for name in (COMPANIES_CSV, PAYMENTS_CSV, PERSON_LINKS_CSV) if not (raw_dir / name).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"В папке {raw_dir} нет исходных CSV: {', '.join(missing)}. "
+            "Положите туда CSV кейса или возьмите синтетический демо-набор: "
+            "python -m data_pipeline --raw-dir data/demo build"
+        )
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = db_path.with_suffix(db_path.suffix + ".tmp")

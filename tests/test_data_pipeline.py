@@ -232,5 +232,39 @@ class DemoDataTest(unittest.TestCase):
                 conn.close()
 
 
+class SetupErrorsTest(unittest.TestCase):
+    """Ошибки первого запуска: нет CSV, PDF отчётов лежат не в той папке."""
+
+    def test_build_without_csv_gives_hint_and_exit_code(self):
+        import contextlib
+        import io
+
+        from data_pipeline.__main__ import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError) as ctx:
+                build_database(tmp, Path(tmp) / "db.sqlite")
+            self.assertIn("data/demo", str(ctx.exception))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = main(["--raw-dir", tmp, "--db", str(Path(tmp) / "db.sqlite"), "build"])
+            self.assertEqual(code, 2)
+            self.assertIn("df_Uid_data_hack.csv", err.getvalue())
+            self.assertNotIn("Traceback", err.getvalue())
+
+    def test_find_pdf_in_reports_dir_or_raw_dir(self):
+        from data_pipeline.reports.ocr import _find_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp)
+            reports = raw / "bank_reports"
+            (raw / "a.pdf").write_bytes(b"%PDF")
+            self.assertEqual(_find_pdf(reports, "a.pdf"), raw / "a.pdf")  # папки bank_reports нет
+            reports.mkdir()
+            (reports / "a.pdf").write_bytes(b"%PDF")
+            self.assertEqual(_find_pdf(reports, "a.pdf"), reports / "a.pdf")
+            self.assertIsNone(_find_pdf(reports, "b.pdf"))
+
+
 if __name__ == "__main__":
     unittest.main()
