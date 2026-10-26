@@ -15,6 +15,7 @@ key_resources, cost_drivers, geography), поэтому поля заполне�
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from typing import Any
@@ -99,6 +100,15 @@ def _payment_summary(flows: list[dict[str, Any]]) -> dict[str, Any]:
         "coverage": round((total - unknown) / total, 6) if total else None,
         "top1_share": round(flows[0]["amount"] / total, 6) if total else None,
     }
+
+
+def _built_at(conn: sqlite3.Connection) -> str | None:
+    """Дата сборки базы (``YYYY-MM-DD``) из отчёта о качестве в таблице meta."""
+    row = conn.execute("SELECT value FROM meta WHERE key = 'quality_report'").fetchone()
+    if row is None:
+        return None
+    built = json.loads(row[0]).get("built_at")
+    return built[:10] if built else None
 
 
 def build_profile(conn: sqlite3.Connection, company_id: str) -> CompanyProfile | None:
@@ -224,6 +234,12 @@ def build_profile(conn: sqlite3.Connection, company_id: str) -> CompanyProfile |
          "OKFS_NAME", "CL_TYPE", "NEGATIVEMARK", "GROUP_ID", *_PRODUCT_COLUMNS.values()],
         line,
     ))
+    # Дата выгрузки в данных кейса не указана; берём дату сборки базы из CSV. Без неё ai_engine
+    # в каждом анализе пишет «профиль компании: дата обновления профиля» как пробел в данных.
+    built_at = _built_at(conn)
+    if built_at:
+        sources.append({"field": "updated_at", "rule": "дата сборки базы из CSV кейса; "
+                        "дата самой выгрузки в данных не указана"})
     missing.append("рыночная доля и позиция в отрасли: нет в данных кейса")
     missing.append("название компании: данные обезличены")
 
@@ -240,7 +256,7 @@ def build_profile(conn: sqlite3.Connection, company_id: str) -> CompanyProfile |
         customers=customers,
         financials=financials,
         data_sources=sources,
-        updated_at=None,  # дата актуальности выгрузки в кейсе не указана
+        updated_at=built_at,
         # Сырую строку CSV (prod_lea=1, FACTORING_MARK…) сюда не кладём: ai_engine отдаёт профиль
         # в LLM целиком, и модель цитировала служебные коды в выводах. Все значения уже есть
         # в читаемых полях выше, а происхождение — в data_sources.

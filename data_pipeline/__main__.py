@@ -17,6 +17,7 @@
     python -m data_pipeline news-show news_xxx                            # публикация + все источники события
     python -m data_pipeline news-search "ключевая ставка" [--days 7]
     python -m data_pipeline news-enqueue                                  # задачи news.process в Redis ai_engine
+    python -m data_pipeline news-reprefilter                              # пересчитать предотбор после смены правил
 """
 
 from __future__ import annotations
@@ -89,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--days", type=int, help="только за последние N дней")
     p.add_argument("--limit", type=int, default=5)
     sub.add_parser("news-enqueue", help="поставить необработанные новости в очередь Redis (REDIS_URL)")
+    sub.add_parser("news-reprefilter", help="пересчитать предотбор загруженных новостей по текущим правилам")
     p = sub.add_parser("search-reports", help="поиск по аналитике банка")
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=3)
@@ -199,6 +201,10 @@ def _news_command(args: argparse.Namespace, settings: DataSettings) -> int:
     elif args.command == "news-search":
         since = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat() if args.days else None
         _print(search_news(conn, args.query, period=(since, None), limit=args.limit))
+    elif args.command == "news-reprefilter":
+        from .news.store import reprefilter
+
+        _print(reprefilter(conn))
     elif args.command == "news-enqueue":
         from ai_engine import Settings
         from ai_engine.queue.redis_queue import RedisQueue
