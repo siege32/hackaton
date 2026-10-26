@@ -434,6 +434,9 @@ function renderAnalysis(rawResult, status) {
     .filter(item => item.kind === 'analytics')
     .filter((item, index, all) => all.findIndex(other => other.ref_id === item.ref_id) === index);
   const reasonEvidence = evidence.filter(item => item.kind !== 'analytics');
+  // Ограничения приходят из трёх мест и часто повторяются (после уточнения одна мысль — до 4 раз).
+  const limitations = [...(result.limitations || []), ...(result.missing_data || []), ...(first.limitations || [])]
+    .filter((item, index, all) => item && all.findIndex(other => other.trim().toLowerCase() === item.trim().toLowerCase()) === index);
   const isDropOnly = events.length > 0 && events.every(event => event.relevance_class === 'DROP');
   const externalSources = (result.sources_used || [])
     .filter(source => source.type === 'external_search')
@@ -456,7 +459,7 @@ function renderAnalysis(rawResult, status) {
       try { safeUrl = ['http:', 'https:'].includes(new URL(source.url).protocol); } catch {}
       return safeUrl ? `<div class="source-row"><span>${escapeHtml(source.source_name || source.title || source.source || 'Источник')}</span><a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Открыть ↗</a></div>` : '';
     }).join('')}</section>` : ''}
-    ${[...(result.limitations || []), ...(result.missing_data || []), ...(first.limitations || [])].map(item => `<div class="limitation">${escapeHtml(item)}</div>`).join('')}
+    ${limitations.length ? `<section class="result-section"><h3>Ограничения и пробелы в данных · ${limitations.length}</h3>${limitations.map(item => `<div class="limitation">${escapeHtml(item)}</div>`).join('')}</section>` : ''}
     ${result.recommended_checks?.length ? `<section class="result-section"><h3>Что проверить</h3>${result.recommended_checks.map(item => `<div class="claim"><p>${escapeHtml(item)}</p></div>`).join('')}</section>` : ''}
     <div class="news-actions"><button class="button button-secondary" id="show-refinement">Добавить уточнение</button></div>
     <form id="refinement-form" class="stack-form hidden"><label>Уточнение пользователя<textarea name="text" required minlength="3" rows="3" placeholder="Например: кредитный портфель полностью зафиксирован до 2028 года"></textarea></label><label>Что уточняем<select name="kind"><option value="dependency">Зависимость</option><option value="business_model">Бизнес-модель</option><option value="product">Продукт</option><option value="region">Регион</option><option value="other">Другое</option></select></label><button class="button button-primary" type="submit">Пересчитать анализ</button></form>`;
