@@ -24,6 +24,16 @@ _ALLOWED_EVIDENCE_KINDS = {
     "fact", "relationship", "analytics", "calculation", "inference", "hypothesis",
     "user_statement", "external_search",
 }
+#: Виды, которые модель придумывает вместо допустимых. Раньше одно такое основание
+#: («analysis») отбрасывало весь синтез -> «Частичный результат» с технической ошибкой.
+#: Это рассуждения модели, поэтому они становятся inference/hypothesis (confirmed=False);
+#: проверки опоры на факты, связи, отчёты и расчёты остаются строгими.
+_EVIDENCE_KIND_ALIASES = {
+    "analysis": "inference", "reasoning": "inference", "model_inference": "inference",
+    "conclusion": "inference", "interpretation": "inference", "deduction": "inference",
+    "model": "inference", "logic": "inference",
+    "assumption": "hypothesis", "speculation": "hypothesis", "scenario": "hypothesis",
+}
 
 
 @dataclass
@@ -111,12 +121,12 @@ def validate_llm_insight(
         for e_index, item in enumerate(raw_evidence):
             if not isinstance(item, dict):
                 raise SchemaValidationError(f"events[{index}].evidence[{e_index}] is not an object")
-            kind = str(item.get("kind") or "").strip()
+            kind = str(item.get("kind") or "").strip().lower()
             ref_id = str(item.get("ref_id") or "").strip()
             if kind not in _ALLOWED_EVIDENCE_KINDS:
-                raise SchemaValidationError(
-                    f"events[{index}].evidence[{e_index}] has unknown kind {kind!r}"
-                )
+                # Незнакомый вид — рассуждение модели без опоры на источник: не отбрасываем
+                # весь анализ, а помечаем основание как неподтверждённый вывод модели.
+                kind = _EVIDENCE_KIND_ALIASES.get(kind, "inference")
             quote = str(item.get("quote") or "")
             supports = str(item.get("supports") or "")
             source_id = str(item.get("source_id") or "")
@@ -188,7 +198,7 @@ def validate_llm_insight(
         event_limitations = _string_list(raw.get("limitations"))
         if neutral_direction:
             event_limitations.append(
-                "LLM returned neutral direction; normalized to unknown because neutral is not a supported enum value"
+                "Модель указала нейтральное направление; такого значения нет, поэтому направление — «не определено»"
             )
         event = ImpactEvent(
             news_id=news_id,
