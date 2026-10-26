@@ -409,7 +409,7 @@ class InsightEngine:
             status = AnalysisStatus.COMPLETED
 
         missing_data = _dedupe_strings(
-            missing_data + [f"профиль компании: {_PROFILE_GAP_LABELS.get(gap, gap)}" for gap in _profile_gaps(company)]
+            missing_data + [f"В профиле компании нет сведений: {_PROFILE_GAP_LABELS.get(gap, gap)}" for gap in _profile_gaps(company)]
         )
         unknowns = _dedupe_strings(
             unknowns
@@ -976,20 +976,11 @@ class InsightEngine:
                 if event.impact_type == ImpactType.UNKNOWN:
                     event.impact_type = ImpactType.INDIRECT
                 event.hypothesis = True
-                event.limitations.append(
-                    "Пользователь указал на зависимость, но внешними данными она не подтверждена"
-                )
-                limitations.append(
-                    "Уточнение о зависимости основано на заявлении пользователя, а не на подтверждённом внешнем факте"
-                )
             elif synthesized is None:
                 event.hypothesis = True
-                event.limitations.append(
-                    "Анализ изменён с учётом неподтверждённого ввода пользователя"
-                )
-                limitations.append(
-                    "Применено уточнение пользователя; зависящие от него выводы требуют внешней проверки"
-                )
+            # Что уточнение — неподтверждённое заявление пользователя, видно по основанию
+            # user_statement («не подтверждено внешним источником») и одной общей строке
+            # ограничений ниже. Раньше та же мысль добавлялась ещё 2–3 раза.
 
         updated.analysis_id = stable_id(
             "analysis",
@@ -1017,7 +1008,8 @@ class InsightEngine:
             list(previous.limitations)
             + (synthesized.limitations if synthesized is not None else [])
             + limitations
-            + ["Уточнение предоставлено пользователем и не является подтверждённым внешним фактом"]
+            + ["Уточнение предоставлено пользователем и не подтверждено внешними источниками; "
+               "зависящие от него выводы требуют проверки"]
         )
         risks, opportunities = self._derive_risks_and_opportunities(updated.events)
         updated.key_risks = (
