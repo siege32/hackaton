@@ -105,6 +105,46 @@ def _drop_textless(conn: sqlite3.Connection) -> None:
         )
 
 
+def reprefilter(conn: sqlite3.Connection) -> dict[str, int]:
+    """Пересчитать предотбор уже загруженных новостей по текущим правилам.
+
+    Возраст считается на момент загрузки (fetched_at), а не на сегодня — иначе
+    вся старая лента разом ушла бы в DROP «устарела». should_process: DROP -> 0;
+    бывший DROP, ставший KEEP/REVIEW, -> 1, если это не дубль; иначе как было.
+    """
+    from .prefilter import prefilter
+    from .sources import MANUAL_SOURCE_ID
+
+    counts = {"checked": 0, "changed": 0}
+    rows = conn.execute(
+        "SELECT news_id, source_id, title, text, categories, published_at, fetched_at, text_quality, "
+        "prefilter, should_process, duplicate_of FROM news"
+    ).fetchall()
+    with conn:
+        for r in rows:
+            counts["checked"] += 1
+            fetched = datetime.fromisoformat(r["fetched_at"]) if r["fetched_at"] else None
+            result = prefilter(r["title"] or "", r["text"] or "", categories=json.loads(r["categories"] or "[]"),
+                               published_at=r["published_at"], text_quality=r["text_quality"] or "full",
+                               manual=r["source_id"] == MANUAL_SOURCE_ID, now=fetched)
+            if result.decision == r["prefilter"]:
+                continue
+            should = bool(r["should_process"])
+            if result.decision == DROP:
+                should = False
+            elif r["prefilter"] == DROP:
+                should = r["duplicate_of"] is None
+            conn.execute(
+                "UPDATE news SET prefilter = ?, prefilter_reasons = ?, topics = ?, should_process = ? WHERE news_id = ?",
+                (result.decision, json.dumps(result.reasons, ensure_ascii=False), json.dumps(result.topics),
+                 int(should), r["news_id"]),
+            )
+            counts["changed"] += 1
+            key = f"{r['prefilter']}->{result.decision}"
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def make_news_id(url_norm: str | None, text_hash: str) -> str:
     key = url_norm or f"text:{text_hash}"
     return "news_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]

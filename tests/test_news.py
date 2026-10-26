@@ -180,6 +180,20 @@ class PipelineTest(unittest.TestCase):
         others = self.conn.execute("SELECT count(*) FROM news WHERE prefilter != 'DROP'").fetchone()[0]
         self.assertGreater(others, 0)
 
+    def test_reprefilter_applies_current_rules_to_stored_news(self):
+        from data_pipeline.news.store import reprefilter
+
+        self.run_both()
+        before = dict(self.conn.execute("SELECT news_id, prefilter FROM news"))
+        self.assertEqual(reprefilter(self.conn)["changed"], 0)  # правила те же — ничего не меняется
+        news_id = next(nid for nid, pf in before.items() if pf == KEEP)
+        with self.conn:  # как будто старая версия правил ошибочно отсеяла новость
+            self.conn.execute("UPDATE news SET prefilter = 'DROP', should_process = 0 WHERE news_id = ?", (news_id,))
+        counts = reprefilter(self.conn)
+        self.assertEqual(counts["DROP->KEEP"], 1)
+        row = self.conn.execute("SELECT prefilter, should_process FROM news WHERE news_id = ?", (news_id,)).fetchone()
+        self.assertEqual((row[0], row[1]), (KEEP, 1))
+
     def test_fetch_prefilter_cluster_and_novelty(self):
         a, b = self.run_both()
         self.assertEqual((a["status"], a["new"], a["KEEP"], a["DROP"]), ("success", 2, 1, 1))
