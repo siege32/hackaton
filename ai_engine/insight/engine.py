@@ -350,7 +350,9 @@ class InsightEngine:
                 )
             except (LLMError, SchemaValidationError) as exc:
                 llm_failed = True
-                limitations.append(f"Не удалось подготовить синтез аналитики: {exc.message}")
+                limitations.append(
+                    "Итоговый вывод модели не прошёл проверку по источникам; показан упрощённый результат по правилам"
+                )
                 self._logger.warning(
                     "insight LLM synthesis failed company_id=%s error=%s", company_id, exc.message
                 )
@@ -381,6 +383,11 @@ class InsightEngine:
             limitations = _dedupe_strings(limitations + synthesis.limitations)
             missing_data = _dedupe_strings(missing_data + synthesis.missing_data)
         else:
+            # Без синтеза никто не отбирал фрагменты аналитики по смыслу: для события,
+            # связь которого не подтверждена, выдача поиска — не позиция банка по теме.
+            for event in events:
+                if event.relevance_class != RelevanceClass.KEEP:
+                    event.evidence = [e for e in event.evidence if e.kind != "analytics"]
             summary = self._default_summary(company, events)
             key_risks, opportunities = self._derive_risks_and_opportunities(events)
             recommended = self._default_checks(events, company, relationships)

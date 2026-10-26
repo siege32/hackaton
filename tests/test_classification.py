@@ -182,7 +182,7 @@ class LLMClassificationValidationTests(unittest.TestCase):
         assessment = service.classify_news_for_company(GAS_NEWS.news_id, "company-cement")
         self.assertEqual(assessment.relevance_class, RelevanceClass.REVIEW)
         self.assertEqual(assessment.supporting_fact_ids, [])
-        self.assertTrue(any("without verifiable fact references" in item for item in assessment.limitations))
+        self.assertTrue(any("без проверяемых ссылок на факты" in item for item in assessment.limitations))
 
     def test_fabricated_quote_is_dropped(self):
         service, *_ = self._service()

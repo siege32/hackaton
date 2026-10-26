@@ -76,6 +76,13 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(found.status_code, 200)
         self.assertEqual(found.json()["data"][0]["news_id"], created.json()["news_id"])
 
+        # Фильтр релевантности из интерфейса доходит до поиска (раньше параметр игнорировался).
+        prefilter = created.json()["prefilter"]
+        other = [value for value in ("KEEP", "REVIEW", "DROP") if value != prefilter]
+        only_other = self.client.get("/api/v1/news/search", params={"query": "пошлины удобрения", "prefilter": other})
+        self.assertEqual(only_other.json()["status"], "empty")
+        self.assertEqual(self.client.get("/api/v1/news/search", params={"query": "пошлины", "prefilter": "X"}).status_code, 422)
+
     def test_report_search_reads_prepared_ocr_index(self):
         reports = self.client.get("/api/v1/reports")
         snippets = self.client.get("/api/v1/reports/search", params={"query": "ключевая ставка"})
