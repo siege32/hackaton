@@ -409,3 +409,6 @@ h1 { font: 700 32px/1.2 'Manrope', 'Segoe UI', sans-serif; letter-spacing: -.5px
 /* Бейдж статуса в шапке результата не растягивается по высоте заголовка (был овал) */
 .analysis-topline { align-items: flex-start; }
 .analysis-topline .tag { align-self: flex-start; white-space: nowrap; }
+
+/* Подпись компании в шапке результата анализа */
+.analysis-company { margin-top: 6px; color: var(--muted); font-size: 13px; line-height: 1.4; }

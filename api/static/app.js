@@ -83,6 +83,12 @@ function humanizeResult(value, key = '') {
   return value;
 }
 
+// Читаемое название компании для подписей (данные обезличены: display_name из data_pipeline).
+function companyName(companyId) {
+  const company = (state.companies || []).find(item => item.company_id === companyId);
+  return company?.display_name ? `${company.display_name} (${companyId})` : (companyId || 'не выбрана');
+}
+
 function label(value) {
   return labels[value] || value || 'Не указано';
 }
@@ -139,7 +145,13 @@ function showView(name) {
   const title = ({ overview: 'Обзор', news: 'События', company: 'Компания', reports: 'Аналитика банка' })[name];
   $('#view-title').textContent = title;
   if (name === 'company' && state.companyId) loadCompany(state.companyId);
-  if (name === 'news') loadNews(true);
+  if (name === 'news') {
+    loadNews(true);
+    // Компанию могли сменить на другой вкладке — тогда здесь висел бы анализ прошлой компании.
+    if (state.selectedNews && $('#news-detail').dataset.company !== (state.companyId || '')) {
+      selectNews(state.selectedNews.news_id);
+    }
+  }
   if (name === 'overview' && state.selectedNews) selectNews(state.selectedNews.news_id);
 }
 
@@ -296,7 +308,8 @@ async function loadNews(full = false, query = null) {
 }
 
 async function selectNews(newsId) {
-  const item = [...state.overviewNews, ...state.news].find(news => news.news_id === newsId);
+  const item = [...state.overviewNews, ...state.news].find(news => news.news_id === newsId)
+    || (state.selectedNews?.news_id === newsId ? state.selectedNews : null);
   if (!item) return;
   state.selectedNews = item;
   const requestId = ++state.selectionRequest;
@@ -334,6 +347,7 @@ function renderNewsDetail(payload, target) {
   $('#overview-analysis')?.classList.add('has-content');
   const news = payload.news;
   const sources = payload.sources || [];
+  target.dataset.company = state.companyId || '';
   target.innerHTML = `<div class="selected-news-detail"><p class="eyebrow">СОБЫТИЕ · ${escapeHtml(label(news.metadata?.prefilter || state.selectedNews.prefilter))}</p>
     <h2 class="detail-title">${escapeHtml(news.title || 'Без заголовка')}</h2>
     <div class="feed-foot">${escapeHtml(state.selectedNews.source_name || news.source_id)} · ${escapeHtml(dateLabel(news.published_at))}</div>
@@ -423,6 +437,8 @@ function renderAnalysis(rawResult, status) {
   $('#overview-analysis')?.classList.add('has-content');
   content.classList.remove('hidden');
   const title = state.selectedNews?.title || state.selectedNews?.news_id || 'Анализ события';
+  const resultCompany = result.company_id || state.companyId || '';
+  content.dataset.company = resultCompany;
   const events = result.events || [];
   const first = events[0] || {};
   const rationale = result.summary || first.mechanism || 'Анализ сохранён без краткого резюме.';
@@ -445,7 +461,7 @@ function renderAnalysis(rawResult, status) {
   const sourceRows = [...articleSources, ...externalSources].filter((source, index, all) =>
     source.url && all.findIndex(item => item.url === source.url) === index
   );
-  content.innerHTML = `<div class="analysis-topline"><div><p class="eyebrow">РЕЗУЛЬТАТ · ${escapeHtml(label(status))}</p><h2>${escapeHtml(title)}</h2></div><span class="tag ${status === 'partial' ? 'review' : 'keep'}">${escapeHtml(label(status))}</span></div>
+  content.innerHTML = `<div class="analysis-topline"><div><p class="eyebrow">РЕЗУЛЬТАТ · ${escapeHtml(label(status))}</p><h2>${escapeHtml(title)}</h2><p class="analysis-company">Для компании: ${escapeHtml(companyName(resultCompany))}</p></div><span class="tag ${status === 'partial' ? 'review' : 'keep'}">${escapeHtml(label(status))}</span></div>
     <p class="analysis-summary">${escapeHtml(rationale)}</p>
     <div class="analysis-metrics"><div class="analysis-metric"><small>РЕЛЕВАНТНОСТЬ</small><strong>${escapeHtml(label(first.relevance_class))}</strong></div><div class="analysis-metric"><small>НАПРАВЛЕНИЕ</small><strong>${escapeHtml(label(first.impact_direction))}</strong></div><div class="analysis-metric"><small>ГОРИЗОНТ</small><strong>${escapeHtml(label(first.impact_horizon))}</strong></div></div>
     ${events.map(event => `<section class="result-section"><h3>${escapeHtml(label(event.relevance_class))} · ${escapeHtml(label(event.impact_type))}</h3><div class="claim"><p>${escapeHtml(event.mechanism || 'Механизм влияния не подтверждён.')}</p>${(event.potential_consequences || []).map(item => `<p>${escapeHtml(item)}</p>`).join('')}${event.confidence !== null && event.confidence !== undefined ? `<small>Уверенность модели: ${Math.round(event.confidence * 100)}%</small>` : ''}</div></section>`).join('')}
