@@ -243,3 +243,33 @@ class InsightEngineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvidenceKindValidationTests(unittest.TestCase):
+    """Незнакомый вид основания от модели не должен отбрасывать весь синтез."""
+
+    def _validate(self, evidence):
+        from ai_engine.insight.validation import validate_llm_insight
+
+        payload = {"summary": "s", "events": [{
+            "news_id": "n1", "relevance_class": "REVIEW", "impact_direction": "negative",
+            "impact_type": "indirect", "mechanism": "m", "evidence": evidence,
+        }]}
+        return validate_llm_insight(payload, company_id="c", requested_news_ids=["n1"], facts_by_news={},
+                                    relationships=[], analytics_by_id={}, calculations_by_id={})
+
+    def test_unknown_kind_becomes_unconfirmed_inference(self):
+        # Проверка сайта 26.10: «events[0].evidence[2] has unknown kind 'analysis'» -> частичный результат.
+        result = self._validate([{"kind": "analysis", "ref_id": "x", "quote": "q"},
+                                 {"kind": "Assumption", "ref_id": "y"},
+                                 {"kind": "something_new", "ref_id": "z"}])
+        self.assertEqual([(e.kind, e.confirmed) for e in result.events[0].evidence],
+                         [("inference", False), ("hypothesis", False), ("inference", False)])
+
+    def test_grounding_checks_stay_strict(self):
+        from ai_engine.errors import GroundingValidationError
+
+        with self.assertRaises(GroundingValidationError):
+            self._validate([{"kind": "fact", "ref_id": "invented-fact"}])
+        with self.assertRaises(GroundingValidationError):
+            self._validate([{"kind": "analytics", "ref_id": "not-retrieved"}])
