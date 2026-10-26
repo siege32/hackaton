@@ -261,5 +261,15 @@ class PaymentCalculationRepository:
         ]
 
 
+def ru_amount(value: float) -> str:
+    """10774000 -> «10 774 000» (разряды через пробел, как принято в русском тексте)."""
+    return f"{value:,.0f}".replace(",", " ")
+
+
+def ru_pct(share: float) -> str:
+    """0.489 -> «48,9%» (десятичная запятая)."""
+    return f"{share:.1%}".replace(".", ",")
+
+
 def _pct(part: float, total: float) -> str:
-    return f"{part / total:.1%}" if total else "н/д"
+    return ru_pct(part / total) if total else "н/д"

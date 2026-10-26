@@ -237,6 +237,8 @@ class DemoDataTest(unittest.TestCase):
                 self.assertEqual(profile.geography[0], "г. Москва")
                 self.assertNotIn("Москва", profile.geography)  # «г. Москва · Москва» без повтора
                 self.assertNotIn("csv_row", profile.raw)  # служебные коды CSV не уходят в LLM
+                pay = next(r for r in rels if r.metadata.get("kind") == "payment")
+                self.assertRegex(pay.evidence[0], r"на сумму \d{1,3}(?: \d{3})* ₽ \(\d+,\d%")  # русский формат
                 self.assertRegex(profile.updated_at, r"^\d{4}-\d{2}-\d{2}$")  # дата сборки базы
                 self.assertNotIn("prod_lea", str(profile.to_dict()))
             finally:

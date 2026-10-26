@@ -260,6 +260,9 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(found["status"], "success")
         self.assertEqual(found["data"][0]["news_id"], result.news_id)
         self.assertEqual(search_news(self.conn, "космический туризм")["status"], "empty")
+        # Без даты — момент добавления, иначе новость уходит в самый низ ленты.
+        published = self.conn.execute("SELECT published_at FROM news WHERE news_id = ?", (result.news_id,)).fetchone()[0]
+        self.assertTrue(published and published.startswith(str(datetime.now(timezone.utc).year)))
 
     def test_enqueue_once_per_version(self):
         self.run_both()
