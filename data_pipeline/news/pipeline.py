@@ -108,8 +108,9 @@ _MANUAL = MANUAL_SOURCE
 def add_manual_text(conn: sqlite3.Connection, title: str, text: str, *, url: str | None = None,
                     published_at: str | None = None) -> IngestResult:
     """Добавить новость текстом (например, новость, которую жюри даёт для проверки)."""
-    # Без URL дубли ищутся по хешу текста.
-    item = FeedItem(url=url or "", title=title, full_text=text, published_at=published_at)
+    # Без URL дубли ищутся по хешу текста. Без даты ставим момент добавления: иначе новость
+    # без published_at уходит в самый низ ленты и её не видно без поиска.
+    item = FeedItem(url=url or "", title=title, full_text=text, published_at=published_at or now_iso())
     return _ingest_item(conn, _MANUAL, item, "", None, manual=True)
 
 
@@ -120,6 +121,7 @@ def add_url(conn: sqlite3.Connection, url: str, *, download: Downloader = http_g
     if not text:
         raise FetchError(f"Не удалось выделить текст статьи: {url}")
     title, _, body = text.partition("\n")
+    date = date or now_iso()  # дата не нашлась на странице — момент добавления
     item = FeedItem(url=url, title=title.strip(), full_text=body.strip() or text, published_at=date)
     return _ingest_item(conn, _MANUAL, item, "", date, manual=True)
 

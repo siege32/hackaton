@@ -19,7 +19,7 @@ import sqlite3
 from ai_engine.models import Relationship, RelationType, Significance
 
 from .config import COMPANIES_CSV, PAYMENTS_CSV, PERSON_LINKS_CSV
-from .exposure import DIRECTIONS, counterparty_flows
+from .exposure import DIRECTIONS, counterparty_flows, ru_amount, ru_pct
 
 #: Пороги доли платежей направления для поля significance (информативно).
 _HIGH_SHARE = 0.20
@@ -92,8 +92,8 @@ class PaymentRelationshipRepository:
                         direction=direction,
                         share=share,
                         evidence=[
-                            f"{PAYMENTS_CSV}: {f['pay_cnt']} платежей на сумму {f['amount']:,.0f} "
-                            f"({share:.1%} {_DIRECTION_RU[direction]} платежей компании)"
+                            f"{PAYMENTS_CSV}: {f['pay_cnt']} платежей на сумму {ru_amount(f['amount'])} ₽ "
+                            f"({ru_pct(share)} {_DIRECTION_RU[direction]} платежей компании)"
                             if share is not None
                             else f"{PAYMENTS_CSV}: {f['pay_cnt']} платежей"
                         ],
