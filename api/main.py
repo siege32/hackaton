@@ -243,12 +243,15 @@ def news_search(
     query: str = Query(min_length=2, max_length=300),
     days: int | None = Query(default=None, ge=1, le=3650),
     limit: int = Query(default=10, ge=1, le=50),
+    prefilter: list[str] = Query(default=["KEEP", "REVIEW"]),
     conn: sqlite3.Connection = Depends(news_connection),
 ) -> dict:
     from datetime import datetime, timedelta, timezone
 
+    if any(value not in {"KEEP", "REVIEW", "DROP"} for value in prefilter):
+        raise HTTPException(status_code=422, detail="Недопустимый фильтр релевантности")
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() if days else None
-    return search_news(conn, query, period=(since, None), limit=limit)
+    return search_news(conn, query, period=(since, None), filters={"prefilter": prefilter}, limit=limit)
 
 
 @app.get("/api/v1/news")

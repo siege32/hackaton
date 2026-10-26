@@ -127,6 +127,10 @@ def validate_llm_insight(
                 # Незнакомый вид — рассуждение модели без опоры на источник: не отбрасываем
                 # весь анализ, а помечаем основание как неподтверждённый вывод модели.
                 kind = _EVIDENCE_KIND_ALIASES.get(kind, "inference")
+            if kind == "fact" and ref_id in ("", news_id) and ref_id not in facts_by_news.get(news_id, {}):
+                # Модель сослалась на саму новость, а не на извлечённый факт (бывает, когда
+                # фактов нет): это её прочтение новости, а не выдуманный факт.
+                kind = "inference"
             quote = str(item.get("quote") or "")
             supports = str(item.get("supports") or "")
             source_id = str(item.get("source_id") or "")

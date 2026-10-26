@@ -416,7 +416,7 @@ class CompanyNewsClassifier:
         if assessment.relevance_class == RelevanceClass.DROP and assessment.missing_data:
             assessment.relevance_class = RelevanceClass.REVIEW
             assessment.limitations.append(
-                "DROP with missing company data was downgraded to REVIEW"
+                "Новость не отнесена к «Не связано»: в профиле компании не хватает данных, нужна проверка"
             )
 
         # Missing profile data is relevant context, not automatically a
@@ -427,7 +427,7 @@ class CompanyNewsClassifier:
         if assessment.relevance_class == RelevanceClass.KEEP and not assessment.impact_mechanism:
             assessment.relevance_class = RelevanceClass.REVIEW
             assessment.limitations.append(
-                "KEEP without a described impact mechanism was downgraded to REVIEW"
+                "Оценка «Связано» понижена до «Нужна проверка»: не описан механизм влияния"
             )
         return assessment
 

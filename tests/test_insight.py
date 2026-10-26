@@ -266,6 +266,12 @@ class EvidenceKindValidationTests(unittest.TestCase):
         self.assertEqual([(e.kind, e.confirmed) for e in result.events[0].evidence],
                          [("inference", False), ("hypothesis", False), ("inference", False)])
 
+    def test_fact_pointing_to_news_itself_becomes_inference(self):
+        # Перепроверка 26.10: «events[0] cites unknown fact 'news_…' for news 'news_…'» -> частичный результат.
+        result = self._validate([{"kind": "fact", "ref_id": "n1", "quote": "q"}, {"kind": "fact", "ref_id": ""}])
+        self.assertEqual([(e.kind, e.confirmed) for e in result.events[0].evidence],
+                         [("inference", False), ("inference", False)])
+
     def test_grounding_checks_stay_strict(self):
         from ai_engine.errors import GroundingValidationError
 

@@ -95,7 +95,7 @@ def validate_assessment_payload(
             if fact_id not in supporting_ids:
                 supporting_ids.append(fact_id)
         else:
-            warnings.append(f"unknown supporting fact id {fact_id!r} was dropped")
+            warnings.append("Ссылка модели на несуществующий факт отброшена")
 
     evidence: list[EvidenceItem] = []
     seen_evidence = set()
@@ -105,18 +105,18 @@ def validate_assessment_payload(
         raise SchemaValidationError("evidence must be a list")
     for index, item in enumerate(raw_evidence or []):
         if not isinstance(item, dict):
-            warnings.append(f"evidence[{index}] is not an object and was dropped")
+            warnings.append("Некорректное основание модели отброшено")
             had_invalid_evidence = True
             continue
         fact_id = str(item.get("fact_id") or "")
         fact = facts_by_id.get(fact_id)
         if fact is None:
-            warnings.append(f"evidence[{index}] references unknown fact id {fact_id!r} and was dropped")
+            warnings.append("Ссылка модели на несуществующий факт отброшена")
             had_invalid_evidence = True
             continue
         quote = str(item.get("quote") or "").strip()
         if not quote:
-            warnings.append(f"evidence[{index}] has no quote and was dropped")
+            warnings.append("Основание модели без цитаты отброшено")
             had_invalid_evidence = True
             continue
         grounded = contains_quote(source_text, quote) or contains_quote(fact.quote, quote) or contains_quote(
@@ -124,7 +124,7 @@ def validate_assessment_payload(
         )
         if not grounded:
             warnings.append(
-                f"evidence[{index}] quote is not grounded in the source or cited fact and was dropped"
+                "Цитата модели не найдена в тексте новости; основание отброшено"
             )
             had_invalid_evidence = True
             continue
@@ -145,16 +145,16 @@ def validate_assessment_payload(
 
     if relevance == RelevanceClass.KEEP and not supporting_ids:
         warnings.append(
-            "KEEP assessment had no valid supporting facts and was downgraded to REVIEW"
+            "Оценка «Связано» понижена до «Нужна проверка»: нет подтверждающих фактов"
         )
-        limitations.append("LLM claimed KEEP without verifiable fact references")
+        limitations.append("Модель указала связь без проверяемых ссылок на факты")
         relevance = RelevanceClass.REVIEW
 
     if relevance == RelevanceClass.KEEP and not evidence and had_invalid_evidence:
         warnings.append(
-            "KEEP assessment had evidence that failed grounding checks and was downgraded to REVIEW"
+            "Оценка «Связано» понижена до «Нужна проверка»: цитаты не подтвердились текстом новости"
         )
-        limitations.append("LLM evidence quotes could not be grounded in the source")
+        limitations.append("Цитаты модели не найдены в тексте новости")
         relevance = RelevanceClass.REVIEW
 
     if relevance == RelevanceClass.KEEP and not evidence and supporting_ids:
@@ -170,7 +170,7 @@ def validate_assessment_payload(
                     supports="cited supporting fact",
                 )
             )
-        limitations.append("evidence entries were reconstructed from cited fact quotes")
+        limitations.append("Основания восстановлены по цитатам указанных фактов")
 
     if relevance == RelevanceClass.DROP:
         direction = ImpactDirection.UNKNOWN
@@ -182,15 +182,15 @@ def validate_assessment_payload(
         try:
             numeric = float(confidence)
         except (TypeError, ValueError):
-            warnings.append("confidence is not numeric and was set to null")
+            warnings.append("Уверенность модели не число и не учитывается")
             confidence = None
         else:
             clamped = max(0.0, min(1.0, numeric))
             if abs(clamped - numeric) > 1e-9:
-                warnings.append("confidence was outside [0, 1] and was clamped")
+                warnings.append("Уверенность модели вне диапазона 0–100% и приведена к границе")
             confidence = clamped
             limitations.append(
-                "уверенность — предварительная оценка модели, а не вероятность финансовых потерь"
+                "Уверенность — предварительная оценка модели, а не вероятность финансовых потерь"
             )
 
     if warnings:
